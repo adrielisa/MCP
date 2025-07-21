@@ -73,10 +73,53 @@ class UpnifyAuthenticator {
         }
     }
 
+    async getProspectPhases(email: string, password: string): Promise<any[]> {
+        const { token, userInfo } = await this.getTokenAndUserInfo(email, password);
+        
+        try {
+            // Construir URL con query parameters
+            const queryParams = new URLSearchParams({
+                entidad: '0'
+            });
+
+            const response = await fetch(`${this.baseUrl}/catalogos/fases?${queryParams}`, {
+                method: 'GET',
+                headers: {
+                    'token': token,
+                    'Content-Type': 'application/json',
+                }
+            });
+
+            if (!response.ok) {
+                const errorText = await response.text();
+                throw new Error(`Error al obtener catálogo de fases: ${response.status} ${response.statusText}. ${errorText}`);
+            }
+
+            const phases = await response.json();
+            return phases;
+        } catch (error) {
+            throw new Error(`Error al obtener catálogo de fases de Upnify: ${error instanceof Error ? error.message : error}`);
+        }
+    }
+
     async createProspect(email: string, password: string, prospectData: any): Promise<any> {
         const { token, userInfo } = await this.getTokenAndUserInfo(email, password);
         
         try {
+            // Obtener el catálogo de fases para prospectos
+            let tkFase = prospectData.tkFase;
+            if (!tkFase) {
+                try {
+                    const phases = await this.getProspectPhases(email, password);
+                    if (phases && phases.length > 0) {
+                        tkFase = phases[0].tkFase; // Usar la primera fase disponible
+                        console.log(`Usando fase por defecto: ${phases[0].fase} (${tkFase})`);
+                    }
+                } catch (phaseError) {
+                    console.warn('No se pudo obtener el catálogo de fases, usando valor por defecto');
+                    tkFase = "PFAS-AF9C06CD-A4B2-4A68-8383-241935B40E37"; // Fallback al valor original
+                }
+            }
             const upnifyPayload = {
                 choice_empresa: "",
                 search_terms: "",
@@ -110,7 +153,7 @@ class UpnifyAuthenticator {
                 idMunicipio: prospectData.idMunicipio || "",
                 ciudad: prospectData.ciudad || "",
                 codigoPostal: prospectData.codigoPostal || "",
-                tkFase: prospectData.tkFase || "PFAS-AF9C06CD-A4B2-4A68-8383-241935B40E37", 
+                tkFase: tkFase, // Usar la fase obtenida del catálogo o la proporcionada
                 tkOrigen: prospectData.tkOrigen || "",
                 facebook: prospectData.facebook || "",
                 twitter: prospectData.twitter || "",
@@ -391,6 +434,57 @@ class UpnifyAuthenticator {
         }
     }
 
+    async createReminder(email: string, password: string, reminderData: any): Promise<any> {
+        const { token, userInfo } = await this.getTokenAndUserInfo(email, password);
+        
+        try {
+            const upnifyPayload = {
+                key: "tkCarpeta",
+                tipoCarpeta: "1",
+                tkOportunidad: "",
+                asunto: reminderData.asunto || "",
+                gmt: "10",
+                tkProspecto: "",
+                search_terms: "",
+                descripcion: reminderData.descripcion || "",
+                idTipoPendiente: "1",
+                frecuencia: "",
+                recurrencia: "1",
+                terminar: "0",
+                diasMes: "1",
+                diasRecurrencia: "",
+                fechaInicio: reminderData.fechaInicio || ""
+            };
+
+            const response = await fetch(`${this.baseUrl}/v4/agenda/recordatorios`, {
+                method: 'POST',
+                headers: {
+                    'token': token,
+                    'Content-Type': 'application/json',
+                },
+                body: JSON.stringify(upnifyPayload)
+            });
+
+            if (!response.ok) {
+                const errorText = await response.text();
+                console.error('Payload enviado:', JSON.stringify(upnifyPayload, null, 2));
+                console.error('Token usado:', token);
+                console.error('Respuesta del servidor:', errorText);
+                throw new Error(`Error al crear recordatorio: ${response.status} ${response.statusText}. ${errorText}`);
+            }
+
+            const result = await response.json();
+            return {
+                success: true,
+                message: 'Recordatorio agendado exitosamente',
+                data: result,
+                tkEmpresa: userInfo.tkEmpresa
+            };
+        } catch (error) {
+            throw new Error(`Error al agendar recordatorio en Upnify: ${error instanceof Error ? error.message : error}`);
+        }
+    }
+
     // Limpiar cache de tokens expirados
     cleanExpiredTokens(): void {
         const now = new Date();
@@ -593,6 +687,38 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
                         }
                     },
                     required: ['email', 'password', 'agrupacion', 'periodicidad']
+                }
+            },
+            {
+                name: 'create-upnify-reminder',
+                description: 'Create a new reminder in Upnify agenda (requires authentication)',
+                inputSchema: {
+                    type: 'object',
+                    properties: {
+                        // Credenciales de autenticación
+                        email: {
+                            type: 'string',
+                            description: 'Upnify email address for authentication'
+                        },
+                        password: {
+                            type: 'string',
+                            description: 'Upnify password for authentication'
+                        },
+                        // Datos del recordatorio
+                        asunto: {
+                            type: 'string',
+                            description: 'Subject/title of the reminder'
+                        },
+                        descripcion: {
+                            type: 'string',
+                            description: 'Description or details of the reminder'
+                        },
+                        fechaInicio: {
+                            type: 'string',
+                            description: 'Start date and time in format YYYY-MM-DD HH:mm (e.g., "2025-07-26 05:00")'
+                        }
+                    },
+                    required: ['email', 'password', 'asunto', 'descripcion', 'fechaInicio']
                 }
             },
             {
@@ -1098,6 +1224,79 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
                         text: JSON.stringify({
                             success: false,
                             error: `Error al crear oportunidad en Upnify: ${errorMessage}`
+                        }, null, 2)
+                    }
+                ]
+            };
+        }
+    } else if (name === 'create-upnify-reminder') {
+        const { email, password, asunto, descripcion, fechaInicio } = args as any;
+        
+        if (!email || !password) {
+            return {
+                content: [
+                    {
+                        type: 'text',
+                        text: JSON.stringify({
+                            success: false,
+                            error: 'Se requieren las credenciales de Upnify (email y password)'
+                        }, null, 2)
+                    }
+                ]
+            };
+        }
+
+        // Validar parámetros requeridos
+        if (!asunto || !descripcion || !fechaInicio) {
+            return {
+                content: [
+                    {
+                        type: 'text',
+                        text: JSON.stringify({
+                            success: false,
+                            error: 'Se requieren todos los parámetros: asunto, descripcion, fechaInicio'
+                        }, null, 2)
+                    }
+                ]
+            };
+        }
+        
+        try {
+            const reminderData = {
+                asunto,
+                descripcion,
+                fechaInicio
+            };
+            
+            const result = await upnifyAuth.createReminder(email, password, reminderData);
+            
+            return {
+                content: [
+                    {
+                        type: 'text',
+                        text: JSON.stringify({
+                            success: true,
+                            message: 'Recordatorio agendado exitosamente en Upnify',
+                            reminder: {
+                                asunto: asunto,
+                                descripcion: descripcion,
+                                fechaInicio: fechaInicio
+                            },
+                            data: result.data
+                        }, null, 2)
+                    }
+                ]
+            };
+            
+        } catch (error) {
+            const errorMessage = error instanceof Error ? error.message : 'Error desconocido';
+            return {
+                content: [
+                    {
+                        type: 'text',
+                        text: JSON.stringify({
+                            success: false,
+                            error: `Error al agendar recordatorio en Upnify: ${errorMessage}`
                         }, null, 2)
                     }
                 ]
