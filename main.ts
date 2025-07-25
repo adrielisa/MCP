@@ -113,10 +113,8 @@ class UpnifyAuthenticator {
                     const phases = await this.getProspectPhases(email, password);
                     if (phases && phases.length > 0) {
                         tkFase = phases[0].tkFase; // Usar la primera fase disponible
-                        console.log(`Usando fase por defecto: ${phases[0].fase} (${tkFase})`);
                     }
                 } catch (phaseError) {
-                    console.warn('No se pudo obtener el catálogo de fases, usando valor por defecto');
                     tkFase = "PFAS-AF9C06CD-A4B2-4A68-8383-241935B40E37"; // Fallback al valor original
                 }
             }
@@ -329,7 +327,6 @@ class UpnifyAuthenticator {
             // Crear fecha de cierre estimado (30 días desde hoy)
             const cierreEstimado = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString().split('T')[0];
 
-            // Valores por defecto según especificación
             const payload = {
                 'cp.fechaDeEntrega': '',
                 concepto: opportunityData.concepto,
