@@ -1,0 +1,16 @@
+{
+    "name": "UpnifIA",
+    "description": "Integración de Upnify CRM mediante MCP",
+    "capabilities": {
+        "authentication": {
+            "type": "api_key",
+            "fields": [
+                {
+                    "name": "tkIntegracion",
+                    "label": "Token de Integración Upnify",
+                    "required": true
+                }
+            ]
+        }
+    }
+}

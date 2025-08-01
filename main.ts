@@ -4,10 +4,14 @@ import {
     CallToolRequestSchema,
     ListToolsRequestSchema,
 } from "@modelcontextprotocol/sdk/types.js";
+import * as dotenv from 'dotenv';
 
-// Cache de tokens por usuario para evitar logins repetitivos
+// Cargar variables de entorno
+dotenv.config();
+
+// Cache de tokens por tkIntegracion para evitar logins repetitivos
 interface TokenCache {
-    [key: string]: {
+    [tkIntegracion: string]: {
         token: string;
         expiry: Date;
         userInfo: any;
@@ -17,14 +21,14 @@ interface TokenCache {
 class UpnifyAuthenticator {
     private tokenCache: TokenCache = {};
     private baseUrl = 'https://api.upnify.com';
+    private salesUpUrl = 'https://api.salesup.com';
 
-    private getCacheKey(email: string, password: string): string {
-        // Crear una clave única pero no almacenar la contraseña directamente
-        return `${email}_${Buffer.from(password).toString('base64').substring(0, 10)}`;
+    private getCacheKey(tkIntegracion: string): string {
+        return tkIntegracion;
     }
 
-    async getTokenAndUserInfo(email: string, password: string): Promise<{ token: string, userInfo: any }> {
-        const cacheKey = this.getCacheKey(email, password);
+    async getTokenAndUserInfo(tkIntegracion: string): Promise<{ token: string, userInfo: any }> {
+        const cacheKey = this.getCacheKey(tkIntegracion);
 
         // Verificar si tenemos un token válido en cache
         const cached = this.tokenCache[cacheKey];
@@ -33,48 +37,49 @@ class UpnifyAuthenticator {
         }
 
         try {
-            // Hacer login para obtener nuevo token
-            const response = await fetch(`${this.baseUrl}/v4/login`, {
+            // Hacer login usando tkIntegracion para obtener nuevo token
+            const response = await fetch(`${this.salesUpUrl}/integraciones/sesion`, {
                 method: 'POST',
                 headers: {
                     'Content-Type': 'application/json',
+                    'token': tkIntegracion
                 },
-                body: JSON.stringify({
-                    usuario: email,
-                    contrasenia: password
-                })
+                body: JSON.stringify({})
             });
 
             if (!response.ok) {
-                throw new Error(`Error en login: ${response.status} ${response.statusText}`);
+                throw new Error(`Error en login con tkIntegracion: ${response.status} ${response.statusText}`);
             }
 
             const data = await response.json();
 
             if (!data || data.length === 0) {
-                throw new Error('Credenciales inválidas o respuesta inesperada del servidor');
+                throw new Error('Token de integración inválido o respuesta inesperada del servidor');
             }
 
             const userInfo = data[0];
-            if (!userInfo.tkSesion) {
+            if (!userInfo.token) {
                 throw new Error('Token de sesión no recibido');
             }
 
+            // Calcular fecha de expiración (por defecto 2 horas desde ahora)
+            const expiry = new Date(Date.now() + 2 * 60 * 60 * 1000);
+
             // Guardar en cache
             this.tokenCache[cacheKey] = {
-                token: userInfo.tkSesion,
-                expiry: new Date(userInfo.expiracion),
+                token: userInfo.token,
+                expiry: expiry,
                 userInfo: userInfo
             };
 
-            return { token: userInfo.tkSesion, userInfo };
+            return { token: userInfo.token, userInfo };
         } catch (error) {
-            throw new Error(`Error al autenticarse con Upnify: ${error instanceof Error ? error.message : error}`);
+            throw new Error(`Error al autenticarse con Upnify usando tkIntegracion: ${error instanceof Error ? error.message : error}`);
         }
     }
 
-    async getProspectPhases(email: string, password: string): Promise<any[]> {
-        const { token, userInfo } = await this.getTokenAndUserInfo(email, password);
+    async getProspectPhases(tkIntegracion: string): Promise<any[]> {
+        const { token, userInfo } = await this.getTokenAndUserInfo(tkIntegracion);
 
         try {
             // Construir URL con query parameters
@@ -102,15 +107,15 @@ class UpnifyAuthenticator {
         }
     }
 
-    async createProspect(email: string, password: string, prospectData: any): Promise<any> {
-        const { token, userInfo } = await this.getTokenAndUserInfo(email, password);
+    async createProspect(tkIntegracion: string, prospectData: any): Promise<any> {
+        const { token, userInfo } = await this.getTokenAndUserInfo(tkIntegracion);
 
         try {
             // Obtener el catálogo de fases para prospectos
             let tkFase = prospectData.tkFase;
             if (!tkFase) {
                 try {
-                    const phases = await this.getProspectPhases(email, password);
+                    const phases = await this.getProspectPhases(tkIntegracion);
                     if (phases && phases.length > 0) {
                         tkFase = phases[0].tkFase; // Usar la primera fase disponible
                     }
@@ -191,8 +196,8 @@ class UpnifyAuthenticator {
         }
     }
 
-    async getSalesReport(email: string, password: string, reportParams: any): Promise<any> {
-        const { token, userInfo } = await this.getTokenAndUserInfo(email, password);
+    async getSalesReport(tkIntegracion: string, reportParams: any): Promise<any> {
+        const { token, userInfo } = await this.getTokenAndUserInfo(tkIntegracion);
 
         try {
             // Construir URL con parámetros de query
@@ -232,8 +237,8 @@ class UpnifyAuthenticator {
         }
     }
 
-    async searchContacts(email: string, password: string, searchParams: any): Promise<any> {
-        const { token, userInfo } = await this.getTokenAndUserInfo(email, password);
+    async searchContacts(tkIntegracion: string, searchParams: any): Promise<any> {
+        const { token, userInfo } = await this.getTokenAndUserInfo(tkIntegracion);
 
         try {
             // Construir URL con parámetros de query para búsqueda
@@ -317,8 +322,8 @@ class UpnifyAuthenticator {
         }
     }
 
-    async createOpportunity(email: string, password: string, opportunityData: any): Promise<any> {
-        const { token, userInfo } = await this.getTokenAndUserInfo(email, password);
+    async createOpportunity(tkIntegracion: string, opportunityData: any): Promise<any> {
+        const { token, userInfo } = await this.getTokenAndUserInfo(tkIntegracion);
 
         try {
             // Calcular comisionMonto automáticamente
@@ -390,8 +395,8 @@ class UpnifyAuthenticator {
         }
     }
 
-    async getPendingPayments(email: string, password: string, reportParams: any): Promise<any> {
-        const { token, userInfo } = await this.getTokenAndUserInfo(email, password);
+    async getPendingPayments(tkIntegracion: string, reportParams: any): Promise<any> {
+        const { token, userInfo } = await this.getTokenAndUserInfo(tkIntegracion);
 
         try {
             // Construir URL con parámetros de query para cobros pendientes
@@ -431,8 +436,8 @@ class UpnifyAuthenticator {
         }
     }
 
-    async createReminder(email: string, password: string, reminderData: any): Promise<any> {
-        const { token, userInfo } = await this.getTokenAndUserInfo(email, password);
+    async createReminder(tkIntegracion: string, reminderData: any): Promise<any> {
+        const { token, userInfo } = await this.getTokenAndUserInfo(tkIntegracion);
 
         try {
             const upnifyPayload = {
@@ -482,8 +487,8 @@ class UpnifyAuthenticator {
         }
     }
 
-    async getActivityReport(email: string, password: string, params: { agrupacion: number, periodo: number }): Promise<any> {
-        const { token, userInfo } = await this.getTokenAndUserInfo(email, password);
+    async getActivityReport(tkIntegracion: string, params: { agrupacion: number, periodo: number }): Promise<any> {
+        const { token, userInfo } = await this.getTokenAndUserInfo(tkIntegracion);
         try {
             const queryParams = new URLSearchParams({
                 agrupacion: params.agrupacion.toString(),
@@ -513,8 +518,8 @@ class UpnifyAuthenticator {
         }
     }
 
-    async getConversionReport(email: string, password: string, params: { agrupacion: number, periodo: number, situacion: number }): Promise<any> {
-        const { token, userInfo } = await this.getTokenAndUserInfo(email, password);
+    async getConversionReport(tkIntegracion: string, params: { agrupacion: number, periodo: number, situacion: number }): Promise<any> {
+        const { token, userInfo } = await this.getTokenAndUserInfo(tkIntegracion);
         try {
             const queryParams = new URLSearchParams({
                 agrupacion: params.agrupacion.toString(),
@@ -572,43 +577,33 @@ const server = new Server({
     },
 });
 
+// Función auxiliar para obtener el tkIntegracion del contexto
+function getTkIntegracion(request: any): string {
+    // Usar directamente la variable de entorno como respaldo
+    const tkIntegracion = process.env.TK_INTEGRACION || 'P074243F238-9BD5-4EA1-8DD9-D05E890EA024';
+
+    console.error('=== DEBUG AUTENTICACIÓN ===');
+    console.error('Process env TK_INTEGRACION:', process.env.TK_INTEGRACION);
+    console.error('Token final usado:', tkIntegracion);
+    console.error('Request meta:', JSON.stringify(request.meta, null, 2));
+    console.error('=== FIN DEBUG ===');
+
+    if (!tkIntegracion) {
+        throw new Error('tkIntegracion no configurado. Por favor configura tu token de integración.');
+    }
+    return tkIntegracion;
+}
+
 // Lista de herramientas disponibles
 server.setRequestHandler(ListToolsRequestSchema, async () => {
     return {
         tools: [
             {
-                name: 'upnify-login',
-                description: 'Login to Upnify and get user information',
-                inputSchema: {
-                    type: 'object',
-                    properties: {
-                        email: {
-                            type: 'string',
-                            description: 'Upnify email address'
-                        },
-                        password: {
-                            type: 'string',
-                            description: 'Upnify password'
-                        }
-                    },
-                    required: ['email', 'password']
-                }
-            },
-            {
                 name: 'create-upnify-prospect',
-                description: 'Create a new prospect in Upnify CRM (requires authentication)',
+                description: 'Create a new prospect in Upnify CRM',
                 inputSchema: {
                     type: 'object',
                     properties: {
-                        // Credenciales de autenticación
-                        email: {
-                            type: 'string',
-                            description: 'Upnify email address for authentication'
-                        },
-                        password: {
-                            type: 'string',
-                            description: 'Upnify password for authentication'
-                        },
                         // Datos del prospecto
                         nombre: {
                             type: 'string',
@@ -669,25 +664,15 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
                             description: 'Additional comments about the prospect'
                         }
                     },
-                    required: ['email', 'password', 'nombre', 'correo']
+                    required: ['nombre', 'correo']
                 }
             },
             {
                 name: 'get-upnify-sales-report',
-                description: 'Get sales report from Upnify with customizable grouping, period, year and tax options (requires authentication)',
+                description: 'Get sales report from Upnify with customizable grouping, period, year and tax options',
                 inputSchema: {
                     type: 'object',
                     properties: {
-                        // Credenciales de autenticación
-                        email: {
-                            type: 'string',
-                            description: 'Upnify email address for authentication'
-                        },
-                        password: {
-                            type: 'string',
-                            description: 'Upnify password for authentication'
-                        },
-                        // Parámetros del reporte
                         agrupacion: {
                             type: 'integer',
                             description: 'Group by: 1=Executive, 2=Group, 3=Line, 17=Industry, 4=Origin, 5=Country, 6=Region',
@@ -714,25 +699,15 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
                             default: 0
                         }
                     },
-                    required: ['email', 'password', 'agrupacion', 'periodicidad', 'anio', 'impuestos']
+                    required: ['agrupacion', 'periodicidad', 'anio', 'impuestos']
                 }
             },
             {
                 name: 'get-upnify-pending-payments',
-                description: 'Get pending payments report from Upnify with customizable grouping and period options (requires authentication)',
+                description: 'Get pending payments report from Upnify with customizable grouping and period options',
                 inputSchema: {
                     type: 'object',
                     properties: {
-                        // Credenciales de autenticación
-                        email: {
-                            type: 'string',
-                            description: 'Upnify email address for authentication'
-                        },
-                        password: {
-                            type: 'string',
-                            description: 'Upnify password for authentication'
-                        },
-                        // Parámetros del reporte
                         agrupacion: {
                             type: 'integer',
                             description: 'Group by: 1=Executive, 2=Group, 3=Line, 17=Industry, 4=Origin, 5=Country, 6=Region',
@@ -746,24 +721,15 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
                             default: 4
                         }
                     },
-                    required: ['email', 'password', 'agrupacion', 'periodicidad']
+                    required: ['agrupacion', 'periodicidad']
                 }
             },
             {
                 name: 'create-upnify-reminder',
-                description: 'Create a new reminder in Upnify agenda (requires authentication)',
+                description: 'Create a new reminder in Upnify agenda',
                 inputSchema: {
                     type: 'object',
                     properties: {
-                        // Credenciales de autenticación
-                        email: {
-                            type: 'string',
-                            description: 'Upnify email address for authentication'
-                        },
-                        password: {
-                            type: 'string',
-                            description: 'Upnify password for authentication'
-                        },
                         // Datos del recordatorio
                         asunto: {
                             type: 'string',
@@ -778,24 +744,15 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
                             description: 'Start date and time in format YYYY-MM-DD HH:mm (e.g., "2025-07-26 05:00")'
                         }
                     },
-                    required: ['email', 'password', 'asunto', 'descripcion', 'fechaInicio']
+                    required: ['asunto', 'descripcion', 'fechaInicio']
                 }
             },
             {
                 name: 'search-upnify-contacts',
-                description: 'Search for contacts (prospects and clients) in Upnify by name, email, or phone (requires authentication)',
+                description: 'Search for contacts (prospects and clients) in Upnify by name, email, or phone',
                 inputSchema: {
                     type: 'object',
                     properties: {
-                        // Credenciales de autenticación
-                        email: {
-                            type: 'string',
-                            description: 'Upnify email address for authentication'
-                        },
-                        password: {
-                            type: 'string',
-                            description: 'Upnify password for authentication'
-                        },
                         // Parámetros de búsqueda
                         buscar: {
                             type: 'string',
@@ -809,24 +766,15 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
                             maximum: 100
                         }
                     },
-                    required: ['email', 'password', 'buscar']
+                    required: ['buscar']
                 }
             },
             {
                 name: 'create-upnify-opportunity',
-                description: 'Create a new opportunity for a prospect in Upnify CRM (requires authentication and tkProspecto from search)',
+                description: 'Create a new opportunity for a prospect in Upnify CRM (requires tkProspecto from search)',
                 inputSchema: {
                     type: 'object',
                     properties: {
-                        // Credenciales de autenticación
-                        email: {
-                            type: 'string',
-                            description: 'Upnify email address for authentication'
-                        },
-                        password: {
-                            type: 'string',
-                            description: 'Upnify password for authentication'
-                        },
                         // Datos de la oportunidad
                         concepto: {
                             type: 'string',
@@ -848,23 +796,15 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
                             maximum: 1
                         }
                     },
-                    required: ['email', 'password', 'concepto', 'tkProspecto', 'monto', 'comision']
+                    required: ['concepto', 'tkProspecto', 'monto', 'comision']
                 }
             },
             {
                 name: 'get-upnify-activity-report',
-                description: 'Get activity report from Upnify by group or executive and period (requires authentication)',
+                description: 'Get activity report from Upnify by group or executive and period',
                 inputSchema: {
                     type: 'object',
                     properties: {
-                        email: {
-                            type: 'string',
-                            description: 'Upnify email address for authentication'
-                        },
-                        password: {
-                            type: 'string',
-                            description: 'Upnify password for authentication'
-                        },
                         agrupacion: {
                             type: 'integer',
                             description: 'Group by: 1=Executive, 2=Group',
@@ -879,22 +819,20 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
                         }
 
                     },
-                    required: ['email', 'password', 'agrupacion', 'periodo']
+                    required: ['agrupacion', 'periodo']
                 }
             },
             {
                 name: 'get-upnify-conversion-report',
-                description: 'Get conversion report from Upnify by group, executive, origin, or region and period (requires authentication)',
+                description: 'Get conversion report from Upnify by group, executive, origin, or region and period',
                 inputSchema: {
                     type: 'object',
                     properties: {
-                        email: { type: 'string', description: 'Upnify email address for authentication' },
-                        password: { type: 'string', description: 'Upnify password for authentication' },
                         agrupacion: { type: 'integer', description: 'Group by: 1=Executive, 2=Group, 3=Origin, 4=Region', enum: [1, 2, 3, 4], default: 2 },
                         periodo: { type: 'integer', description: 'Period for report filtering. Options: 1=Today, 2=Yesterday, 3=Current week, 4=Last week, 5=Current month, 6=Last month, 8=Current year, 10=Last year, 13=Current semester, 14=Last semester, 17=Current quarter, 18=Last quarter.', enum: [1, 2, 3, 4, 5, 6, 8, 10, 13, 14, 17, 18], default: 5 },
                         situacion: { type: 'integer', description: 'Situation: 0=Include discarded, 1=Exclude discarded', enum: [0, 1], default: 0 }
                     },
-                    required: ['email', 'password', 'agrupacion', 'periodo', 'situacion']
+                    required: ['agrupacion', 'periodo', 'situacion']
                 }
             }
         ]
@@ -905,613 +843,489 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
 server.setRequestHandler(CallToolRequestSchema, async (request) => {
     const { name, arguments: args } = request.params;
 
-    if (name === 'upnify-login') {
-        const { email, password } = args as { email: string, password: string };
+    try {
+        const tkIntegracion = getTkIntegracion(request);
 
-        try {
-            const { token, userInfo } = await upnifyAuth.getTokenAndUserInfo(email, password);
+        if (name === 'create-upnify-prospect') {
+            const prospectData = args as any;
 
-            return {
-                content: [
-                    {
-                        type: 'text',
-                        text: JSON.stringify({
-                            success: true,
-                            message: 'Login exitoso a Upnify',
-                            user: {
-                                nombre: userInfo.nombre,
-                                apellidos: userInfo.apellidos,
-                                email: userInfo.email,
-                                empresa: userInfo.empresa,
-                                puesto: userInfo.puesto,
-                                expiracion: userInfo.expiracion
-                            }
-                        }, null, 2)
-                    }
-                ]
-            };
+            try {
+                const upnifyData: any = {};
 
-        } catch (error) {
-            const errorMessage = error instanceof Error ? error.message : 'Error desconocido';
-            return {
-                content: [
-                    {
-                        type: 'text',
-                        text: JSON.stringify({
-                            success: false,
-                            error: `Error al hacer login en Upnify: ${errorMessage}`
-                        }, null, 2)
-                    }
-                ]
-            };
+                // Campos obligatorios
+                if (prospectData.nombre) upnifyData.nombre = prospectData.nombre;
+                if (prospectData.correo) upnifyData.correo = prospectData.correo;
+
+                // Campos opcionales
+                if (prospectData.apellidos) upnifyData.apellidos = prospectData.apellidos;
+                if (prospectData.sexo) upnifyData.sexo = prospectData.sexo;
+                if (prospectData.telefono) upnifyData.telefono = prospectData.telefono;
+                if (prospectData.movil) upnifyData.movil = prospectData.movil;
+                if (prospectData.puesto) upnifyData.puesto = prospectData.puesto;
+                if (prospectData.empresa) upnifyData.empresa = prospectData.empresa;
+                if (prospectData.ciudad) upnifyData.ciudad = prospectData.ciudad;
+                if (prospectData.calle) upnifyData.calle = prospectData.calle;
+                if (prospectData.colonia) upnifyData.colonia = prospectData.colonia;
+                if (prospectData.codigoPostal) upnifyData.codigoPostal = prospectData.codigoPostal;
+                if (prospectData.comentarios) upnifyData.comentarios = prospectData.comentarios;
+                if (prospectData.idPais) upnifyData.idPais = prospectData.idPais;
+
+                // Valores por defecto
+                if (!upnifyData.idPais) upnifyData.idPais = 'MX';
+                if (!upnifyData.sexo) upnifyData.sexo = 'H';
+
+                // Crear el prospecto usando el autenticador
+                const result = await upnifyAuth.createProspect(tkIntegracion, upnifyData);
+
+                return {
+                    content: [
+                        {
+                            type: 'text',
+                            text: JSON.stringify({
+                                success: true,
+                                message: 'Prospecto creado exitosamente en Upnify',
+                                data: result
+                            }, null, 2)
+                        }
+                    ]
+                };
+
+            } catch (error) {
+                const errorMessage = error instanceof Error ? error.message : 'Error desconocido';
+                return {
+                    content: [
+                        {
+                            type: 'text',
+                            text: JSON.stringify({
+                                success: false,
+                                error: `Error al crear prospecto en Upnify: ${errorMessage}`
+                            }, null, 2)
+                        }
+                    ]
+                };
+            }
+        } else if (name === 'get-upnify-sales-report') {
+            const { agrupacion, periodicidad, anio, impuestos } = args as any;
+
+            // Validar parámetros requeridos
+            if (agrupacion === undefined || periodicidad === undefined || anio === undefined || impuestos === undefined) {
+                return {
+                    content: [
+                        {
+                            type: 'text',
+                            text: JSON.stringify({
+                                success: false,
+                                error: 'Se requieren todos los parámetros: agrupacion, periodicidad, anio, impuestos'
+                            }, null, 2)
+                        }
+                    ]
+                };
+            }
+
+            try {
+                const reportParams = {
+                    agrupacion,
+                    periodicidad,
+                    anio,
+                    impuestos
+                };
+
+                const result = await upnifyAuth.getSalesReport(tkIntegracion, reportParams);
+
+                const agrupacionLabels: Record<number, string> = {
+                    1: 'Por ejecutivo',
+                    2: 'Por grupo',
+                    3: 'Por línea',
+                    17: 'Por industria',
+                    4: 'Por origen',
+                    5: 'Por país',
+                    6: 'Por región'
+                };
+
+                const periodicidadLabels: Record<number, string> = {
+                    4: 'Mensual',
+                    3: 'Bimestral',
+                    2: 'Trimestral',
+                    1: 'Semestral',
+                    5: 'Quincenal',
+                    6: 'Semanal'
+                };
+
+                const parametersDescription = {
+                    agrupacion: `${agrupacion} (${agrupacionLabels[agrupacion] || 'Desconocido'})`,
+                    periodicidad: `${periodicidad} (${periodicidadLabels[periodicidad] || 'Desconocido'})`,
+                    anio: anio,
+                    impuestos: impuestos === 1 ? 'Incluir' : 'Excluir'
+                };
+
+                return {
+                    content: [
+                        {
+                            type: 'text',
+                            text: JSON.stringify({
+                                success: true,
+                                message: 'Reporte de ventas obtenido exitosamente',
+                                parameters: parametersDescription,
+                                data: result.data
+                            }, null, 2)
+                        }
+                    ]
+                };
+
+            } catch (error) {
+                const errorMessage = error instanceof Error ? error.message : 'Error desconocido';
+                return {
+                    content: [
+                        {
+                            type: 'text',
+                            text: JSON.stringify({
+                                success: false,
+                                error: `Error al obtener reporte de ventas de Upnify: ${errorMessage}`
+                            }, null, 2)
+                        }
+                    ]
+                };
+            }
+        } else if (name === 'get-upnify-pending-payments') {
+            const { agrupacion, periodicidad } = args as any;
+
+            // Validar parámetros requeridos
+            if (agrupacion === undefined || periodicidad === undefined) {
+                return {
+                    content: [
+                        {
+                            type: 'text',
+                            text: JSON.stringify({
+                                success: false,
+                                error: 'Se requieren todos los parámetros: agrupacion, periodicidad'
+                            }, null, 2)
+                        }
+                    ]
+                };
+            }
+
+            try {
+                const reportParams = {
+                    agrupacion,
+                    periodicidad
+                };
+
+                const result = await upnifyAuth.getPendingPayments(tkIntegracion, reportParams);
+
+                // Crear descripción amigable de los parámetros
+                const agrupacionLabels: Record<number, string> = {
+                    1: 'Por ejecutivo',
+                    2: 'Por grupo',
+                    3: 'Por línea',
+                    17: 'Por industria',
+                    4: 'Por origen',
+                    5: 'Por país',
+                    6: 'Por región'
+                };
+
+                const periodicidadLabels: Record<number, string> = {
+                    4: 'Mensual',
+                    3: 'Bimestral',
+                    2: 'Trimestral',
+                    1: 'Semestral',
+                    5: 'Quincenal',
+                    6: 'Semanal'
+                };
+
+                const parametersDescription = {
+                    agrupacion: `${agrupacion} (${agrupacionLabels[agrupacion] || 'Desconocido'})`,
+                    periodicidad: `${periodicidad} (${periodicidadLabels[periodicidad] || 'Desconocido'})`
+                };
+
+                return {
+                    content: [
+                        {
+                            type: 'text',
+                            text: JSON.stringify({
+                                success: true,
+                                message: 'Cobros pendientes obtenidos exitosamente',
+                                parameters: parametersDescription,
+                                total: result.total,
+                                data: result.data
+                            }, null, 2)
+                        }
+                    ]
+                };
+
+            } catch (error) {
+                const errorMessage = error instanceof Error ? error.message : 'Error desconocido';
+                return {
+                    content: [
+                        {
+                            type: 'text',
+                            text: JSON.stringify({
+                                success: false,
+                                error: `Error al obtener cobros pendientes de Upnify: ${errorMessage}`
+                            }, null, 2)
+                        }
+                    ]
+                };
+            }
+        } else if (name === 'search-upnify-contacts') {
+            const { buscar, cantidadRegistros = 10 } = args as any;
+
+            if (!buscar) {
+                return {
+                    content: [
+                        {
+                            type: 'text',
+                            text: JSON.stringify({
+                                success: false,
+                                error: 'El parámetro "buscar" es obligatorio',
+                                help: 'Proporciona un nombre, correo o teléfono para buscar'
+                            }, null, 2)
+                        }
+                    ]
+                };
+            }
+
+            try {
+                const searchParams = {
+                    buscar,
+                    cantidadRegistros
+                };
+
+                const result = await upnifyAuth.searchContacts(tkIntegracion, searchParams);
+
+                return {
+                    content: [
+                        {
+                            type: 'text',
+                            text: JSON.stringify(result, null, 2)
+                        }
+                    ]
+                };
+
+            } catch (error) {
+                const errorMessage = error instanceof Error ? error.message : 'Error desconocido';
+                return {
+                    content: [
+                        {
+                            type: 'text',
+                            text: JSON.stringify({
+                                success: false,
+                                error: `Error al buscar contactos en Upnify: ${errorMessage}`
+                            }, null, 2)
+                        }
+                    ]
+                };
+            }
+        } else if (name === 'create-upnify-opportunity') {
+            const { concepto, tkProspecto, monto, comision } = args as any;
+
+            if (!concepto || !tkProspecto || monto === undefined || comision === undefined) {
+                return {
+                    content: [
+                        {
+                            type: 'text',
+                            text: JSON.stringify({
+                                success: false,
+                                error: 'Se requieren todos los parámetros: concepto, tkProspecto, monto, comision',
+                                help: 'Usa search-upnify-contacts primero para obtener el tkProspecto'
+                            }, null, 2)
+                        }
+                    ]
+                };
+            }
+
+            try {
+                const opportunityData = {
+                    concepto,
+                    tkProspecto,
+                    monto,
+                    comision
+                };
+
+                const result = await upnifyAuth.createOpportunity(tkIntegracion, opportunityData);
+
+                return {
+                    content: [
+                        {
+                            type: 'text',
+                            text: JSON.stringify(result, null, 2)
+                        }
+                    ]
+                };
+
+            } catch (error) {
+                const errorMessage = error instanceof Error ? error.message : 'Error desconocido';
+                return {
+                    content: [
+                        {
+                            type: 'text',
+                            text: JSON.stringify({
+                                success: false,
+                                error: `Error al crear oportunidad en Upnify: ${errorMessage}`
+                            }, null, 2)
+                        }
+                    ]
+                };
+            }
+        } else if (name === 'create-upnify-reminder') {
+            const { asunto, descripcion, fechaInicio } = args as any;
+
+            // Validar parámetros requeridos
+            if (!asunto || !descripcion || !fechaInicio) {
+                return {
+                    content: [
+                        {
+                            type: 'text',
+                            text: JSON.stringify({
+                                success: false,
+                                error: 'Se requieren todos los parámetros: asunto, descripcion, fechaInicio'
+                            }, null, 2)
+                        }
+                    ]
+                };
+            }
+
+            try {
+                const reminderData = {
+                    asunto,
+                    descripcion,
+                    fechaInicio
+                };
+
+                const result = await upnifyAuth.createReminder(tkIntegracion, reminderData);
+
+                return {
+                    content: [
+                        {
+                            type: 'text',
+                            text: JSON.stringify({
+                                success: true,
+                                message: 'Recordatorio agendado exitosamente en Upnify',
+                                reminder: {
+                                    asunto: asunto,
+                                    descripcion: descripcion,
+                                    fechaInicio: fechaInicio
+                                },
+                                data: result.data
+                            }, null, 2)
+                        }
+                    ]
+                };
+            } catch (error) {
+                const errorMessage = error instanceof Error ? error.message : 'Error desconocido';
+                return {
+                    content: [
+                        {
+                            type: 'text',
+                            text: JSON.stringify({
+                                success: false,
+                                error: `Error al agendar recordatorio en Upnify: ${errorMessage}`
+                            }, null, 2)
+                        }
+                    ]
+                };
+            }
+        } else if (name === 'get-upnify-activity-report') {
+            const { agrupacion, periodo } = args as any;
+
+            if (agrupacion === undefined || periodo === undefined) {
+                return {
+                    content: [
+                        {
+                            type: 'text',
+                            text: JSON.stringify({
+                                success: false,
+                                error: 'Se requieren todos los parámetros: agrupacion, periodo'
+                            }, null, 2)
+                        }
+                    ]
+                };
+            }
+
+            try {
+                const params = { agrupacion, periodo };
+                const result = await upnifyAuth.getActivityReport(tkIntegracion, params);
+
+                return {
+                    content: [
+                        {
+                            type: 'text',
+                            text: JSON.stringify(result, null, 2)
+                        }
+                    ]
+                };
+            } catch (error) {
+                const errorMessage = error instanceof Error ? error.message : 'Error desconocido';
+                return {
+                    content: [
+                        {
+                            type: 'text',
+                            text: JSON.stringify({
+                                success: false,
+                                error: `Error al obtener reporte de actividades de Upnify: ${errorMessage}`
+                            }, null, 2)
+                        }
+                    ]
+                };
+            }
+        } else if (name === 'get-upnify-conversion-report') {
+            const { agrupacion, periodo, situacion } = args as any;
+
+            if (agrupacion === undefined || periodo === undefined || situacion === undefined) {
+                return {
+                    content: [
+                        {
+                            type: 'text',
+                            text: JSON.stringify({
+                                success: false,
+                                error: 'Se requieren todos los parámetros: agrupacion, periodo, situacion'
+                            }, null, 2)
+                        }
+                    ]
+                };
+            }
+
+            try {
+                const params = { agrupacion, periodo, situacion };
+                const result = await upnifyAuth.getConversionReport(tkIntegracion, params);
+
+                return {
+                    content: [
+                        {
+                            type: 'text',
+                            text: JSON.stringify(result, null, 2)
+                        }
+                    ]
+                };
+            } catch (error) {
+                const errorMessage = error instanceof Error ? error.message : 'Error desconocido';
+                return {
+                    content: [
+                        {
+                            type: 'text',
+                            text: JSON.stringify({
+                                success: false,
+                                error: `Error al obtener reporte de conversiones de Upnify: ${errorMessage}`
+                            }, null, 2)
+                        }
+                    ]
+                };
+            }
+        } else {
+            throw new Error(`Unknown tool: ${name}`);
         }
-    } else if (name === 'create-upnify-prospect') {
-        const { email, password, ...prospectData } = args as any;
-
-        if (!email || !password) {
-            return {
-                content: [
-                    {
-                        type: 'text',
-                        text: JSON.stringify({
-                            success: false,
-                            error: 'Se requieren las credenciales de Upnify (email y password)'
-                        }, null, 2)
-                    }
-                ]
-            };
-        }
-
-        try {
-            const upnifyData: any = {};
-
-            // Campos obligatorios
-            if (prospectData.nombre) upnifyData.nombre = prospectData.nombre;
-            if (prospectData.correo) upnifyData.correo = prospectData.correo;
-
-            // Campos opcionales
-            if (prospectData.apellidos) upnifyData.apellidos = prospectData.apellidos;
-            if (prospectData.sexo) upnifyData.sexo = prospectData.sexo;
-            if (prospectData.telefono) upnifyData.telefono = prospectData.telefono;
-            if (prospectData.movil) upnifyData.movil = prospectData.movil;
-            if (prospectData.puesto) upnifyData.puesto = prospectData.puesto;
-            if (prospectData.empresa) upnifyData.empresa = prospectData.empresa;
-            if (prospectData.ciudad) upnifyData.ciudad = prospectData.ciudad;
-            if (prospectData.calle) upnifyData.calle = prospectData.calle;
-            if (prospectData.colonia) upnifyData.colonia = prospectData.colonia;
-            if (prospectData.codigoPostal) upnifyData.codigoPostal = prospectData.codigoPostal;
-            if (prospectData.comentarios) upnifyData.comentarios = prospectData.comentarios;
-            if (prospectData.idPais) upnifyData.idPais = prospectData.idPais;
-
-            // Valores por defecto
-            if (!upnifyData.idPais) upnifyData.idPais = 'MX';
-            if (!upnifyData.sexo) upnifyData.sexo = 'H';
-
-            // Crear el prospecto usando el autenticador
-            const result = await upnifyAuth.createProspect(email, password, upnifyData);
-
-            return {
-                content: [
-                    {
-                        type: 'text',
-                        text: JSON.stringify({
-                            success: true,
-                            message: 'Prospecto creado exitosamente en Upnify',
-                            data: result
-                        }, null, 2)
-                    }
-                ]
-            };
-
-        } catch (error) {
-            const errorMessage = error instanceof Error ? error.message : 'Error desconocido';
-            return {
-                content: [
-                    {
-                        type: 'text',
-                        text: JSON.stringify({
-                            success: false,
-                            error: `Error al crear prospecto en Upnify: ${errorMessage}`
-                        }, null, 2)
-                    }
-                ]
-            };
-        }
-    } else if (name === 'get-upnify-sales-report') {
-        const { email, password, agrupacion, periodicidad, anio, impuestos } = args as any;
-
-        if (!email || !password) {
-            return {
-                content: [
-                    {
-                        type: 'text',
-                        text: JSON.stringify({
-                            success: false,
-                            error: 'Se requieren las credenciales de Upnify (email y password)'
-                        }, null, 2)
-                    }
-                ]
-            };
-        }
-
-        // Validar parámetros requeridos
-        if (agrupacion === undefined || periodicidad === undefined || anio === undefined || impuestos === undefined) {
-            return {
-                content: [
-                    {
-                        type: 'text',
-                        text: JSON.stringify({
-                            success: false,
-                            error: 'Se requieren todos los parámetros: agrupacion, periodicidad, anio, impuestos'
-                        }, null, 2)
-                    }
-                ]
-            };
-        }
-
-        try {
-            const reportParams = {
-                agrupacion,
-                periodicidad,
-                anio,
-                impuestos
-            };
-
-            const result = await upnifyAuth.getSalesReport(email, password, reportParams);
-
-            const agrupacionLabels: Record<number, string> = {
-                1: 'Por ejecutivo',
-                2: 'Por grupo',
-                3: 'Por línea',
-                17: 'Por industria',
-                4: 'Por origen',
-                5: 'Por país',
-                6: 'Por región'
-            };
-
-            const periodicidadLabels: Record<number, string> = {
-                4: 'Mensual',
-                3: 'Bimestral',
-                2: 'Trimestral',
-                1: 'Semestral',
-                5: 'Quincenal',
-                6: 'Semanal'
-            };
-
-            const parametersDescription = {
-                agrupacion: `${agrupacion} (${agrupacionLabels[agrupacion] || 'Desconocido'})`,
-                periodicidad: `${periodicidad} (${periodicidadLabels[periodicidad] || 'Desconocido'})`,
-                anio: anio,
-                impuestos: impuestos === 1 ? 'Incluir' : 'Excluir'
-            };
-
-            return {
-                content: [
-                    {
-                        type: 'text',
-                        text: JSON.stringify({
-                            success: true,
-                            message: 'Reporte de ventas obtenido exitosamente',
-                            parameters: parametersDescription,
-                            data: result.data
-                        }, null, 2)
-                    }
-                ]
-            };
-
-        } catch (error) {
-            const errorMessage = error instanceof Error ? error.message : 'Error desconocido';
-            return {
-                content: [
-                    {
-                        type: 'text',
-                        text: JSON.stringify({
-                            success: false,
-                            error: `Error al obtener reporte de ventas de Upnify: ${errorMessage}`
-                        }, null, 2)
-                    }
-                ]
-            };
-        }
-    } else if (name === 'get-upnify-pending-payments') {
-        const { email, password, agrupacion, periodicidad } = args as any;
-
-        if (!email || !password) {
-            return {
-                content: [
-                    {
-                        type: 'text',
-                        text: JSON.stringify({
-                            success: false,
-                            error: 'Se requieren las credenciales de Upnify (email y password)'
-                        }, null, 2)
-                    }
-                ]
-            };
-        }
-
-        // Validar parámetros requeridos
-        if (agrupacion === undefined || periodicidad === undefined) {
-            return {
-                content: [
-                    {
-                        type: 'text',
-                        text: JSON.stringify({
-                            success: false,
-                            error: 'Se requieren todos los parámetros: agrupacion, periodicidad'
-                        }, null, 2)
-                    }
-                ]
-            };
-        }
-
-        try {
-            const reportParams = {
-                agrupacion,
-                periodicidad
-            };
-
-            const result = await upnifyAuth.getPendingPayments(email, password, reportParams);
-
-            // Crear descripción amigable de los parámetros
-            const agrupacionLabels: Record<number, string> = {
-                1: 'Por ejecutivo',
-                2: 'Por grupo',
-                3: 'Por línea',
-                17: 'Por industria',
-                4: 'Por origen',
-                5: 'Por país',
-                6: 'Por región'
-            };
-
-            const periodicidadLabels: Record<number, string> = {
-                4: 'Mensual',
-                3: 'Bimestral',
-                2: 'Trimestral',
-                1: 'Semestral',
-                5: 'Quincenal',
-                6: 'Semanal'
-            };
-
-            const parametersDescription = {
-                agrupacion: `${agrupacion} (${agrupacionLabels[agrupacion] || 'Desconocido'})`,
-                periodicidad: `${periodicidad} (${periodicidadLabels[periodicidad] || 'Desconocido'})`
-            };
-
-            return {
-                content: [
-                    {
-                        type: 'text',
-                        text: JSON.stringify({
-                            success: true,
-                            message: 'Cobros pendientes obtenidos exitosamente',
-                            parameters: parametersDescription,
-                            total: result.total,
-                            data: result.data
-                        }, null, 2)
-                    }
-                ]
-            };
-
-        } catch (error) {
-            const errorMessage = error instanceof Error ? error.message : 'Error desconocido';
-            return {
-                content: [
-                    {
-                        type: 'text',
-                        text: JSON.stringify({
-                            success: false,
-                            error: `Error al obtener cobros pendientes de Upnify: ${errorMessage}`
-                        }, null, 2)
-                    }
-                ]
-            };
-        }
-    } else if (name === 'search-upnify-contacts') {
-        const { email, password, buscar, cantidadRegistros = 10 } = args as any;
-
-        if (!email || !password) {
-            return {
-                content: [
-                    {
-                        type: 'text',
-                        text: JSON.stringify({
-                            success: false,
-                            error: 'Se requieren las credenciales de Upnify (email y password)'
-                        }, null, 2)
-                    }
-                ]
-            };
-        }
-
-        if (!buscar) {
-            return {
-                content: [
-                    {
-                        type: 'text',
-                        text: JSON.stringify({
-                            success: false,
-                            error: 'El parámetro "buscar" es obligatorio',
-                            help: 'Proporciona un nombre, correo o teléfono para buscar'
-                        }, null, 2)
-                    }
-                ]
-            };
-        }
-
-        try {
-            const searchParams = {
-                buscar,
-                cantidadRegistros
-            };
-
-            const result = await upnifyAuth.searchContacts(email, password, searchParams);
-
-            return {
-                content: [
-                    {
-                        type: 'text',
-                        text: JSON.stringify(result, null, 2)
-                    }
-                ]
-            };
-
-        } catch (error) {
-            const errorMessage = error instanceof Error ? error.message : 'Error desconocido';
-            return {
-                content: [
-                    {
-                        type: 'text',
-                        text: JSON.stringify({
-                            success: false,
-                            error: `Error al buscar contactos en Upnify: ${errorMessage}`
-                        }, null, 2)
-                    }
-                ]
-            };
-        }
-    } else if (name === 'create-upnify-opportunity') {
-        const { email, password, concepto, tkProspecto, monto, comision } = args as any;
-
-        if (!email || !password) {
-            return {
-                content: [
-                    {
-                        type: 'text',
-                        text: JSON.stringify({
-                            success: false,
-                            error: 'Se requieren las credenciales de Upnify (email y password)'
-                        }, null, 2)
-                    }
-                ]
-            };
-        }
-
-        if (!concepto || !tkProspecto || monto === undefined || comision === undefined) {
-            return {
-                content: [
-                    {
-                        type: 'text',
-                        text: JSON.stringify({
-                            success: false,
-                            error: 'Se requieren todos los parámetros: concepto, tkProspecto, monto, comision',
-                            help: 'Usa search-upnify-contacts primero para obtener el tkProspecto'
-                        }, null, 2)
-                    }
-                ]
-            };
-        }
-
-        try {
-            const opportunityData = {
-                concepto,
-                tkProspecto,
-                monto,
-                comision
-            };
-
-            const result = await upnifyAuth.createOpportunity(email, password, opportunityData);
-
-            return {
-                content: [
-                    {
-                        type: 'text',
-                        text: JSON.stringify(result, null, 2)
-                    }
-                ]
-            };
-
-        } catch (error) {
-            const errorMessage = error instanceof Error ? error.message : 'Error desconocido';
-            return {
-                content: [
-                    {
-                        type: 'text',
-                        text: JSON.stringify({
-                            success: false,
-                            error: `Error al crear oportunidad en Upnify: ${errorMessage}`
-                        }, null, 2)
-                    }
-                ]
-            };
-        }
-    } else if (name === 'create-upnify-reminder') {
-        const { email, password, asunto, descripcion, fechaInicio } = args as any;
-        if (!email || !password) {
-            return {
-                content: [
-                    {
-                        type: 'text',
-                        text: JSON.stringify({
-                            success: false,
-                            error: 'Se requieren las credenciales de Upnify (email y password)'
-                        }, null, 2)
-                    }
-                ]
-            };
-        }
-        // Validar parámetros requeridos
-        if (!asunto || !descripcion || !fechaInicio) {
-            return {
-                content: [
-                    {
-                        type: 'text',
-                        text: JSON.stringify({
-                            success: false,
-                            error: 'Se requieren todos los parámetros: asunto, descripcion, fechaInicio'
-                        }, null, 2)
-                    }
-                ]
-            };
-        }
-        try {
-            const reminderData = {
-                asunto,
-                descripcion,
-                fechaInicio
-            };
-            const result = await upnifyAuth.createReminder(email, password, reminderData);
-            return {
-                content: [
-                    {
-                        type: 'text',
-                        text: JSON.stringify({
-                            success: true,
-                            message: 'Recordatorio agendado exitosamente en Upnify',
-                            reminder: {
-                                asunto: asunto,
-                                descripcion: descripcion,
-                                fechaInicio: fechaInicio
-                            },
-                            data: result.data
-                        }, null, 2)
-                    }
-                ]
-            };
-        } catch (error) {
-            const errorMessage = error instanceof Error ? error.message : 'Error desconocido';
-            return {
-                content: [
-                    {
-                        type: 'text',
-                        text: JSON.stringify({
-                            success: false,
-                            error: `Error al agendar recordatorio en Upnify: ${errorMessage}`
-                        }, null, 2)
-                    }
-                ]
-            };
-        }
-    } else if (name === 'get-upnify-activity-report') {
-        const { email, password, agrupacion, periodo } = args as any;
-        if (!email || !password) {
-            return {
-                content: [
-                    {
-                        type: 'text',
-                        text: JSON.stringify({
-                            success: false,
-                            error: 'Se requieren las credenciales de Upnify (email y password)'
-                        }, null, 2)
-                    }
-                ]
-            };
-        }
-        if (agrupacion === undefined || periodo === undefined) {
-            return {
-                content: [
-                    {
-                        type: 'text',
-                        text: JSON.stringify({
-                            success: false,
-                            error: 'Se requieren todos los parámetros: agrupacion, periodo'
-                        }, null, 2)
-                    }
-                ]
-            };
-        }
-        try {
-            const params = { agrupacion, periodo };
-            const result = await upnifyAuth.getActivityReport(email, password, params);
-            return {
-                content: [
-                    {
-                        type: 'text',
-                        text: JSON.stringify(result, null, 2)
-                    }
-                ]
-            };
-        } catch (error) {
-            const errorMessage = error instanceof Error ? error.message : 'Error desconocido';
-            return {
-                content: [
-                    {
-                        type: 'text',
-                        text: JSON.stringify({
-                            success: false,
-                            error: `Error al obtener reporte de actividades de Upnify: ${errorMessage}`
-                        }, null, 2)
-                    }
-                ]
-            };
-        }
-    }
-    else if (name === 'get-upnify-conversion-report') {
-        const { email, password, agrupacion, periodo, situacion } = args as any;
-        if (!email || !password) {
-            return {
-                content: [
-                    {
-                        type: 'text',
-                        text: JSON.stringify({
-                            success: false,
-                            error: 'Se requieren las credenciales de Upnify (email y password)'
-                        }, null, 2)
-                    }
-                ]
-            };
-        }
-        if (agrupacion === undefined || periodo === undefined || situacion === undefined) {
-            return {
-                content: [
-                    {
-                        type: 'text',
-                        text: JSON.stringify({
-                            success: false,
-                            error: 'Se requieren todos los parámetros: agrupacion, periodo, situacion'
-                        }, null, 2)
-                    }
-                ]
-            };
-        }
-        try {
-            const params = { agrupacion, periodo, situacion };
-            const result = await upnifyAuth.getConversionReport(email, password, params);
-            return {
-                content: [
-                    {
-                        type: 'text',
-                        text: JSON.stringify(result, null, 2)
-                    }
-                ]
-            };
-        } catch (error) {
-            const errorMessage = error instanceof Error ? error.message : 'Error desconocido';
-            return {
-                content: [
-                    {
-                        type: 'text',
-                        text: JSON.stringify({
-                            success: false,
-                            error: `Error al obtener reporte de conversiones de Upnify: ${errorMessage}`
-                        }, null, 2)
-                    }
-                ]
-            };
-        }
-    }
-    else {
-        throw new Error(`Unknown tool: ${name}`);
+    } catch (error) {
+        const errorMessage = error instanceof Error ? error.message : 'Error desconocido';
+        return {
+            content: [
+                {
+                    type: 'text',
+                    text: JSON.stringify({
+                        success: false,
+                        error: errorMessage
+                    }, null, 2)
+                }
+            ]
+        };
     }
 });
 
