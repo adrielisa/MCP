@@ -6,562 +6,32 @@ import {
 } from "@modelcontextprotocol/sdk/types.js";
 import * as dotenv from 'dotenv';
 
+// Importar los handlers y utilidades
+import { UpnifyAuthenticator } from './auth/upnifyAuth.js';
+import { ProspectsHandler } from './handlers/prospects.js';
+import { OpportunitiesHandler } from './handlers/opportunities.js';
+import { ReportsHandler } from './handlers/reports.js';
+import { UtilitiesHandler } from './handlers/utilities.js';
+import { 
+    getTkIntegracion, 
+    validateReportParams, 
+    validateActivityReportParams, 
+    validateConversionReportParams,
+    formatReportParameters,
+    formatPendingPaymentsParameters,
+    createErrorResponse,
+    createSuccessResponse 
+} from './utils/validators.js';
+
 // Cargar variables de entorno
 dotenv.config();
 
-// Cache de tokens por tkIntegracion para evitar logins repetitivos
-interface TokenCache {
-    [tkIntegracion: string]: {
-        token: string;
-        expiry: Date;
-        userInfo: any;
-    };
-}
-
-class UpnifyAuthenticator {
-    private tokenCache: TokenCache = {};
-    private baseUrl = 'https://api.upnify.com';
-    private salesUpUrl = 'https://api.salesup.com';
-
-    private getCacheKey(tkIntegracion: string): string {
-        return tkIntegracion;
-    }
-
-    async getTokenAndUserInfo(tkIntegracion: string): Promise<{ token: string, userInfo: any }> {
-        const cacheKey = this.getCacheKey(tkIntegracion);
-
-        // Verificar si tenemos un token válido en cache
-        const cached = this.tokenCache[cacheKey];
-        if (cached && new Date() < cached.expiry) {
-            return { token: cached.token, userInfo: cached.userInfo };
-        }
-
-        try {
-            // Hacer login usando tkIntegracion para obtener nuevo token
-            const response = await fetch(`${this.salesUpUrl}/integraciones/sesion`, {
-                method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json',
-                    'token': tkIntegracion
-                },
-                body: JSON.stringify({})
-            });
-
-            if (!response.ok) {
-                throw new Error(`Error en login con tkIntegracion: ${response.status} ${response.statusText}`);
-            }
-
-            const data = await response.json();
-
-            if (!data || data.length === 0) {
-                throw new Error('Token de integración inválido o respuesta inesperada del servidor');
-            }
-
-            const userInfo = data[0];
-            if (!userInfo.token) {
-                throw new Error('Token de sesión no recibido');
-            }
-
-            // Calcular fecha de expiración (por defecto 2 horas desde ahora)
-            const expiry = new Date(Date.now() + 2 * 60 * 60 * 1000);
-
-            // Guardar en cache
-            this.tokenCache[cacheKey] = {
-                token: userInfo.token,
-                expiry: expiry,
-                userInfo: userInfo
-            };
-
-            return { token: userInfo.token, userInfo };
-        } catch (error) {
-            throw new Error(`Error al autenticarse con Upnify usando tkIntegracion: ${error instanceof Error ? error.message : error}`);
-        }
-    }
-
-    async getProspectPhases(tkIntegracion: string): Promise<any[]> {
-        const { token, userInfo } = await this.getTokenAndUserInfo(tkIntegracion);
-
-        try {
-            // Construir URL con query parameters
-            const queryParams = new URLSearchParams({
-                entidad: '0'
-            });
-
-            const response = await fetch(`${this.baseUrl}/catalogos/fases?${queryParams}`, {
-                method: 'GET',
-                headers: {
-                    'token': token,
-                    'Content-Type': 'application/json',
-                }
-            });
-
-            if (!response.ok) {
-                const errorText = await response.text();
-                throw new Error(`Error al obtener catálogo de fases: ${response.status} ${response.statusText}. ${errorText}`);
-            }
-
-            const phases = await response.json();
-            return phases;
-        } catch (error) {
-            throw new Error(`Error al obtener catálogo de fases de Upnify: ${error instanceof Error ? error.message : error}`);
-        }
-    }
-
-    async createProspect(tkIntegracion: string, prospectData: any): Promise<any> {
-        const { token, userInfo } = await this.getTokenAndUserInfo(tkIntegracion);
-
-        try {
-            // Obtener el catálogo de fases para prospectos
-            let tkFase = prospectData.tkFase;
-            if (!tkFase) {
-                try {
-                    const phases = await this.getProspectPhases(tkIntegracion);
-                    if (phases && phases.length > 0) {
-                        tkFase = phases[0].tkFase; // Usar la primera fase disponible
-                    }
-                } catch (phaseError) {
-                    tkFase = "PFAS-AF9C06CD-A4B2-4A68-8383-241935B40E37"; // Fallback al valor original
-                }
-            }
-            const upnifyPayload = {
-                choice_empresa: "",
-                search_terms: "",
-                empresa: prospectData.empresa || "",
-                tkEmpresa: "",
-                cp: {
-                    estatus: "",
-                    validador: "",
-                    division: "",
-                    tipo: "",
-                    gasto: "",
-                    periodo: "",
-                    tipoDeServicio: "",
-                    testFecha: ""
-                },
-                nombre: prospectData.nombre || "",
-                apellidos: prospectData.apellidos || "",
-                titulo: "",
-                sexo: prospectData.sexo || "",
-                correo: prospectData.correo || "",
-                url: prospectData.url || "",
-                telefono2LadaPais: "+52",
-                telefono2: prospectData.telefono || "",
-                movilLadaPais: "+52",
-                movil: prospectData.movil || "",
-                puesto: prospectData.puesto || "",
-                calle: prospectData.calle || "",
-                colonia: prospectData.colonia || "",
-                idPais: prospectData.idPais || "MX",
-                idEstado: prospectData.idEstado || "",
-                idMunicipio: prospectData.idMunicipio || "",
-                ciudad: prospectData.ciudad || "",
-                codigoPostal: prospectData.codigoPostal || "",
-                tkFase: tkFase, // Usar la fase obtenida del catálogo o la proporcionada
-                tkOrigen: prospectData.tkOrigen || "",
-                facebook: prospectData.facebook || "",
-                twitter: prospectData.twitter || "",
-                skype: prospectData.skype || "",
-                linkedIn: prospectData.linkedIn || "",
-                googlePlus: prospectData.googlePlus || "",
-                etiquetas: prospectData.etiquetas || "",
-                tkEtiquetas: prospectData.tkEtiquetas || ""
-            };
-
-            const response = await fetch(`${this.baseUrl}/v4/prospectos`, {
-                method: 'POST',
-                headers: {
-                    'token': token,
-                    'Content-Type': 'application/json',
-                },
-                body: JSON.stringify(upnifyPayload)
-            });
-
-            if (!response.ok) {
-                const errorText = await response.text();
-                console.error('Payload enviado:', JSON.stringify(upnifyPayload, null, 2));
-                console.error('Token usado:', token);
-                console.error('Respuesta del servidor:', errorText);
-                throw new Error(`Error al crear prospecto: ${response.status} ${response.statusText}. ${errorText}`);
-            }
-
-            const result = await response.text();
-            return {
-                success: true,
-                message: 'Prospecto creado exitosamente',
-                response: result,
-                tkEmpresa: userInfo.tkEmpresa
-            };
-        } catch (error) {
-            throw new Error(`Error al crear prospecto en Upnify: ${error instanceof Error ? error.message : error}`);
-        }
-    }
-
-    async getSalesReport(tkIntegracion: string, reportParams: any): Promise<any> {
-        const { token, userInfo } = await this.getTokenAndUserInfo(tkIntegracion);
-
-        try {
-            // Construir URL con parámetros de query
-            const queryParams = new URLSearchParams({
-                agrupacion: reportParams.agrupacion.toString(),
-                periodicidad: reportParams.periodicidad.toString(),
-                anio: reportParams.anio.toString(),
-                impuestos: reportParams.impuestos.toString()
-            });
-
-            const response = await fetch(`${this.baseUrl}/v4/reportesnv/ventas/realizadas?${queryParams}`, {
-                method: 'GET',
-                headers: {
-                    'token': token,
-                    'Content-Type': 'application/json',
-                }
-            });
-
-            if (!response.ok) {
-                const errorText = await response.text();
-                console.error('Parámetros enviados:', reportParams);
-                console.error('Token usado:', token);
-                console.error('Respuesta del servidor:', errorText);
-                throw new Error(`Error al obtener reporte de ventas: ${response.status} ${response.statusText}. ${errorText}`);
-            }
-
-            const result = await response.json();
-            return {
-                success: true,
-                message: 'Reporte de ventas obtenido exitosamente',
-                data: result,
-                parameters: reportParams,
-                tkEmpresa: userInfo.tkEmpresa
-            };
-        } catch (error) {
-            throw new Error(`Error al obtener reporte de ventas de Upnify: ${error instanceof Error ? error.message : error}`);
-        }
-    }
-
-    async searchContacts(tkIntegracion: string, searchParams: any): Promise<any> {
-        const { token, userInfo } = await this.getTokenAndUserInfo(tkIntegracion);
-
-        try {
-            // Construir URL con parámetros de query para búsqueda
-            const queryParams = new URLSearchParams({
-                buscar: searchParams.buscar,
-                cantidadRegistros: searchParams.cantidadRegistros.toString(),
-                secciones: ',prospectos,clientes'
-            });
-
-            const response = await fetch(`${this.baseUrl}/v4/sistema/buscar?${queryParams}`, {
-                method: 'GET',
-                headers: {
-                    'token': token,
-                    'Content-Type': 'application/json',
-                    'User-Agent': 'UpnifyMCP/1.0'
-                }
-            });
-
-            if (!response.ok) {
-                const errorText = await response.text();
-                console.error('Parámetros enviados:', searchParams);
-                console.error('Token usado:', token);
-                console.error('Respuesta del servidor:', errorText);
-                throw new Error(`Error al buscar contactos: ${response.status} ${response.statusText}. ${errorText}`);
-            }
-
-            const resultados = await response.json();
-
-            if (!Array.isArray(resultados) || resultados.length < 2) {
-                return {
-                    success: true,
-                    message: 'Búsqueda completada sin resultados',
-                    termino: searchParams.buscar,
-                    total: 0,
-                    resumen: { prospectos: 0, clientes: 0 },
-                    contactos: [],
-                    tkEmpresa: userInfo.tkEmpresa
-                };
-            }
-
-            // resultados[0] contiene el resumen, resultados[1] contiene los datos
-            const resumen = resultados[0][0] || {};
-            const contactosRaw = resultados[1] || [];
-
-            // Filtrar y formatear solo prospectos y clientes
-            const contactos = contactosRaw
-                .filter((item: any) => item.seccion === 'prospectos' || item.seccion === 'clientes')
-                .map((contacto: any) => ({
-                    seccion: contacto.seccion,
-                    tkProspecto: contacto.tkProspecto,
-                    contacto: contacto.contacto,
-                    correo: contacto.correo,
-                    telefono: contacto.telefono,
-                    movil: contacto.movil,
-                    ejecutivo: contacto.ejecutivo,
-                    ejecutivoIniciales: contacto.ejecutivoIniciales,
-                    empresa: contacto.empresa || '',
-                    id: `${contacto.seccion}-${contacto.tkProspecto}`
-                }));
-
-            return {
-                success: true,
-                message: 'Búsqueda completada exitosamente',
-                termino: searchParams.buscar,
-                total: contactos.length,
-                resumen: {
-                    prospectos: resumen.prospectos || 0,
-                    clientes: resumen.clientes || 0
-                },
-                contactos: contactos,
-                mensaje: contactos.length > 1
-                    ? `Se encontraron ${contactos.length} contactos. Para crear una oportunidad, especifica el tkProspecto del contacto deseado.`
-                    : contactos.length === 1
-                        ? 'Se encontró 1 contacto exacto'
-                        : 'No se encontraron contactos',
-                tkEmpresa: userInfo.tkEmpresa
-            };
-
-        } catch (error) {
-            throw new Error(`Error al buscar contactos en Upnify: ${error instanceof Error ? error.message : error}`);
-        }
-    }
-
-    async createOpportunity(tkIntegracion: string, opportunityData: any): Promise<any> {
-        const { token, userInfo } = await this.getTokenAndUserInfo(tkIntegracion);
-
-        try {
-            // Calcular comisionMonto automáticamente
-            const comisionMonto = parseFloat(opportunityData.monto) * parseFloat(opportunityData.comision);
-
-            // Crear fecha de cierre estimado (30 días desde hoy)
-            const cierreEstimado = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString().split('T')[0];
-
-            const payload = {
-                'cp.fechaDeEntrega': '',
-                concepto: opportunityData.concepto,
-                tkFase: 'OFAS-F2481C74-02F3-435D-A139-A90EDC05E2E9',
-                tkLinea: 'LINP-E302A7F3-C8CD-489B-B9BF-67412CB62D37',
-                tkMoneda: 'MON-ED434B3A-A165-4215-94E5-577327C2EF5E',
-                monto: parseFloat(opportunityData.monto),
-                tipoCambio: 1,
-                comision: parseFloat(opportunityData.comision),
-                comisionMonto: comisionMonto,
-                cierreEstimado: cierreEstimado,
-                tkCerteza: 'CER-42A55CB2-776D-49BC-9AAF-185561FBE167',
-                cantidad: '',
-                tkProspecto: opportunityData.tkProspecto,
-                cp: JSON.stringify({ fechaDeEntrega: '' })
-            };
-
-            // Convertir a URLSearchParams para form-encoded
-            const formData = new URLSearchParams();
-            for (const [key, value] of Object.entries(payload)) {
-                if (value !== undefined && value !== null) {
-                    formData.append(key, value.toString());
-                }
-            }
-
-            const response = await fetch(`${this.baseUrl}/v4/oportunidades`, {
-                method: 'POST',
-                headers: {
-                    'token': token,
-                    'Content-Type': 'application/x-www-form-urlencoded',
-                    'User-Agent': 'UpnifyMCP/1.0'
-                },
-                body: formData.toString()
-            });
-
-            if (!response.ok) {
-                const errorText = await response.text();
-                console.error('Payload enviado:', payload);
-                console.error('Token usado:', token);
-                console.error('Respuesta del servidor:', errorText);
-                throw new Error(`Error al crear oportunidad: ${response.status} ${response.statusText}. ${errorText}`);
-            }
-
-            const result = await response.json();
-            return {
-                success: true,
-                message: 'Oportunidad creada exitosamente',
-                oportunidad: result,
-                detalles: {
-                    concepto: opportunityData.concepto,
-                    monto: parseFloat(opportunityData.monto),
-                    comision: parseFloat(opportunityData.comision),
-                    comisionMonto: comisionMonto,
-                    tkProspecto: opportunityData.tkProspecto,
-                    cierreEstimado: cierreEstimado
-                },
-                tkEmpresa: userInfo.tkEmpresa
-            };
-        } catch (error) {
-            throw new Error(`Error al crear oportunidad en Upnify: ${error instanceof Error ? error.message : error}`);
-        }
-    }
-
-    async getPendingPayments(tkIntegracion: string, reportParams: any): Promise<any> {
-        const { token, userInfo } = await this.getTokenAndUserInfo(tkIntegracion);
-
-        try {
-            // Construir URL con parámetros de query para cobros pendientes
-            const queryParams = new URLSearchParams({
-                agrupacion: reportParams.agrupacion.toString(),
-                periodicidad: reportParams.periodicidad.toString()
-            });
-
-            const response = await fetch(`${this.baseUrl}/v4/reportesnv/clientes/cobrospendientes?${queryParams}`, {
-                method: 'GET',
-                headers: {
-                    'token': token,
-                    'Content-Type': 'application/json',
-                    'User-Agent': 'UpnifyMCP/1.0'
-                }
-            });
-
-            if (!response.ok) {
-                const errorText = await response.text();
-                console.error('Parámetros enviados:', reportParams);
-                console.error('Token usado:', token);
-                console.error('Respuesta del servidor:', errorText);
-                throw new Error(`Error al obtener cobros pendientes: ${response.status} ${response.statusText}. ${errorText}`);
-            }
-
-            const result = await response.json();
-            return {
-                success: true,
-                message: 'Cobros pendientes obtenidos exitosamente',
-                data: result,
-                parameters: reportParams,
-                total: result.length || 0,
-                tkEmpresa: userInfo.tkEmpresa
-            };
-        } catch (error) {
-            throw new Error(`Error al obtener cobros pendientes de Upnify: ${error instanceof Error ? error.message : error}`);
-        }
-    }
-
-    async createReminder(tkIntegracion: string, reminderData: any): Promise<any> {
-        const { token, userInfo } = await this.getTokenAndUserInfo(tkIntegracion);
-
-        try {
-            const upnifyPayload = {
-                key: "tkCarpeta",
-                tipoCarpeta: "1",
-                tkOportunidad: "",
-                asunto: reminderData.asunto || "",
-                gmt: "10",
-                tkProspecto: "",
-                search_terms: "",
-                descripcion: reminderData.descripcion || "",
-                idTipoPendiente: "1",
-                frecuencia: "",
-                recurrencia: "1",
-                terminar: "0",
-                diasMes: "1",
-                diasRecurrencia: "",
-                fechaInicio: reminderData.fechaInicio || ""
-            };
-
-            const response = await fetch(`${this.baseUrl}/v4/agenda/recordatorios`, {
-                method: 'POST',
-                headers: {
-                    'token': token,
-                    'Content-Type': 'application/json',
-                },
-                body: JSON.stringify(upnifyPayload)
-            });
-
-            if (!response.ok) {
-                const errorText = await response.text();
-                console.error('Payload enviado:', JSON.stringify(upnifyPayload, null, 2));
-                console.error('Token usado:', token);
-                console.error('Respuesta del servidor:', errorText);
-                throw new Error(`Error al crear recordatorio: ${response.status} ${response.statusText}. ${errorText}`);
-            }
-
-            const result = await response.json();
-            return {
-                success: true,
-                message: 'Recordatorio agendado exitosamente',
-                data: result,
-                tkEmpresa: userInfo.tkEmpresa
-            };
-        } catch (error) {
-            throw new Error(`Error al agendar recordatorio en Upnify: ${error instanceof Error ? error.message : error}`);
-        }
-    }
-
-    async getActivityReport(tkIntegracion: string, params: { agrupacion: number, periodo: number }): Promise<any> {
-        const { token, userInfo } = await this.getTokenAndUserInfo(tkIntegracion);
-        try {
-            const queryParams = new URLSearchParams({
-                agrupacion: params.agrupacion.toString(),
-                periodo: params.periodo.toString()
-            });
-            const response = await fetch(`${this.baseUrl}/v4/reportesnv/actividades/porperiodo?${queryParams}`, {
-                method: 'GET',
-                headers: {
-                    'token': token,
-                    'Content-Type': 'application/json',
-                }
-            });
-            if (!response.ok) {
-                const errorText = await response.text();
-                throw new Error(`Error al obtener reporte de actividades: ${response.status} ${response.statusText}. ${errorText}`);
-            }
-            const result = await response.json();
-            return {
-                success: true,
-                message: 'Reporte de actividades obtenido exitosamente',
-                data: result,
-                parameters: params,
-                tkEmpresa: userInfo.tkEmpresa
-            };
-        } catch (error) {
-            throw new Error(`Error al obtener reporte de actividades de Upnify: ${error instanceof Error ? error.message : error}`);
-        }
-    }
-
-    async getConversionReport(tkIntegracion: string, params: { agrupacion: number, periodo: number, situacion: number }): Promise<any> {
-        const { token, userInfo } = await this.getTokenAndUserInfo(tkIntegracion);
-        try {
-            const queryParams = new URLSearchParams({
-                agrupacion: params.agrupacion.toString(),
-                periodo: params.periodo.toString(),
-                situacion: params.situacion.toString()
-            });
-            const response = await fetch(`${this.baseUrl}/v4/reportesnv/ventas/conversiones?${queryParams}`, {
-                method: 'GET',
-                headers: {
-                    'token': token,
-                    'Content-Type': 'application/json',
-                }
-            });
-            if (!response.ok) {
-                const errorText = await response.text();
-                throw new Error(`Error al obtener reporte de conversiones: ${response.status} ${response.statusText}. ${errorText}`);
-            }
-            const result = await response.json();
-            return {
-                success: true,
-                message: 'Reporte de conversiones obtenido exitosamente',
-                data: result,
-                parameters: params,
-                tkEmpresa: userInfo.tkEmpresa
-            };
-        } catch (error) {
-            throw new Error(`Error al obtener reporte de conversiones de Upnify: ${error instanceof Error ? error.message : error}`);
-        }
-    }
-
-    // Limpiar cache de tokens expirados
-    cleanExpiredTokens(): void {
-        const now = new Date();
-        Object.keys(this.tokenCache).forEach(key => {
-            if (this.tokenCache[key].expiry <= now) {
-                delete this.tokenCache[key];
-            }
-        });
-    }
-}
-
+// Inicializar autenticador y handlers
 const upnifyAuth = new UpnifyAuthenticator();
+const prospectsHandler = new ProspectsHandler(upnifyAuth);
+const opportunitiesHandler = new OpportunitiesHandler(upnifyAuth);
+const reportsHandler = new ReportsHandler(upnifyAuth);
+const utilitiesHandler = new UtilitiesHandler(upnifyAuth);
 
 // Limpiar tokens expirados cada 30 minutos
 setInterval(() => {
@@ -577,23 +47,6 @@ const server = new Server({
     },
 });
 
-// Función auxiliar para obtener el tkIntegracion del contexto
-function getTkIntegracion(request: any): string {
-    // Usar directamente la variable de entorno como respaldo
-    const tkIntegracion = process.env.TK_INTEGRACION || 'P074243F238-9BD5-4EA1-8DD9-D05E890EA024';
-
-    console.error('=== DEBUG AUTENTICACIÓN ===');
-    console.error('Process env TK_INTEGRACION:', process.env.TK_INTEGRACION);
-    console.error('Token final usado:', tkIntegracion);
-    console.error('Request meta:', JSON.stringify(request.meta, null, 2));
-    console.error('=== FIN DEBUG ===');
-
-    if (!tkIntegracion) {
-        throw new Error('tkIntegracion no configurado. Por favor configura tu token de integración.');
-    }
-    return tkIntegracion;
-}
-
 // Lista de herramientas disponibles
 server.setRequestHandler(ListToolsRequestSchema, async () => {
     return {
@@ -604,7 +57,6 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
                 inputSchema: {
                     type: 'object',
                     properties: {
-                        // Datos del prospecto
                         nombre: {
                             type: 'string',
                             description: 'First name of the prospect'
@@ -730,7 +182,6 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
                 inputSchema: {
                     type: 'object',
                     properties: {
-                        // Datos del recordatorio
                         asunto: {
                             type: 'string',
                             description: 'Subject/title of the reminder'
@@ -753,7 +204,6 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
                 inputSchema: {
                     type: 'object',
                     properties: {
-                        // Parámetros de búsqueda
                         buscar: {
                             type: 'string',
                             description: 'Search term: name, email, or phone number'
@@ -775,7 +225,6 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
                 inputSchema: {
                     type: 'object',
                     properties: {
-                        // Datos de la oportunidad
                         concepto: {
                             type: 'string',
                             description: 'Opportunity concept or description'
@@ -817,7 +266,6 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
                             enum: [1, 2, 3, 4, 5, 6, 8, 10, 13, 14, 17, 18],
                             default: 17
                         }
-
                     },
                     required: ['agrupacion', 'periodo']
                 }
@@ -828,9 +276,24 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
                 inputSchema: {
                     type: 'object',
                     properties: {
-                        agrupacion: { type: 'integer', description: 'Group by: 1=Executive, 2=Group, 3=Origin, 4=Region', enum: [1, 2, 3, 4], default: 2 },
-                        periodo: { type: 'integer', description: 'Period for report filtering. Options: 1=Today, 2=Yesterday, 3=Current week, 4=Last week, 5=Current month, 6=Last month, 8=Current year, 10=Last year, 13=Current semester, 14=Last semester, 17=Current quarter, 18=Last quarter.', enum: [1, 2, 3, 4, 5, 6, 8, 10, 13, 14, 17, 18], default: 5 },
-                        situacion: { type: 'integer', description: 'Situation: 0=Include discarded, 1=Exclude discarded', enum: [0, 1], default: 0 }
+                        agrupacion: { 
+                            type: 'integer', 
+                            description: 'Group by: 1=Executive, 2=Group, 3=Origin, 4=Region', 
+                            enum: [1, 2, 3, 4], 
+                            default: 2 
+                        },
+                        periodo: { 
+                            type: 'integer', 
+                            description: 'Period for report filtering. Options: 1=Today, 2=Yesterday, 3=Current week, 4=Last week, 5=Current month, 6=Last month, 8=Current year, 10=Last year, 13=Current semester, 14=Last semester, 17=Current quarter, 18=Last quarter.', 
+                            enum: [1, 2, 3, 4, 5, 6, 8, 10, 13, 14, 17, 18], 
+                            default: 5 
+                        },
+                        situacion: { 
+                            type: 'integer', 
+                            description: 'Situation: 0=Include discarded, 1=Exclude discarded', 
+                            enum: [0, 1], 
+                            default: 0 
+                        }
                     },
                     required: ['agrupacion', 'periodo', 'situacion']
                 }
@@ -848,484 +311,154 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 
         if (name === 'create-upnify-prospect') {
             const prospectData = args as any;
-
             try {
-                const upnifyData: any = {};
-
-                // Campos obligatorios
-                if (prospectData.nombre) upnifyData.nombre = prospectData.nombre;
-                if (prospectData.correo) upnifyData.correo = prospectData.correo;
-
-                // Campos opcionales
-                if (prospectData.apellidos) upnifyData.apellidos = prospectData.apellidos;
-                if (prospectData.sexo) upnifyData.sexo = prospectData.sexo;
-                if (prospectData.telefono) upnifyData.telefono = prospectData.telefono;
-                if (prospectData.movil) upnifyData.movil = prospectData.movil;
-                if (prospectData.puesto) upnifyData.puesto = prospectData.puesto;
-                if (prospectData.empresa) upnifyData.empresa = prospectData.empresa;
-                if (prospectData.ciudad) upnifyData.ciudad = prospectData.ciudad;
-                if (prospectData.calle) upnifyData.calle = prospectData.calle;
-                if (prospectData.colonia) upnifyData.colonia = prospectData.colonia;
-                if (prospectData.codigoPostal) upnifyData.codigoPostal = prospectData.codigoPostal;
-                if (prospectData.comentarios) upnifyData.comentarios = prospectData.comentarios;
-                if (prospectData.idPais) upnifyData.idPais = prospectData.idPais;
-
-                // Valores por defecto
-                if (!upnifyData.idPais) upnifyData.idPais = 'MX';
-                if (!upnifyData.sexo) upnifyData.sexo = 'H';
-
-                // Crear el prospecto usando el autenticador
-                const result = await upnifyAuth.createProspect(tkIntegracion, upnifyData);
-
-                return {
-                    content: [
-                        {
-                            type: 'text',
-                            text: JSON.stringify({
-                                success: true,
-                                message: 'Prospecto creado exitosamente en Upnify',
-                                data: result
-                            }, null, 2)
-                        }
-                    ]
-                };
-
+                const result = await prospectsHandler.createProspect(tkIntegracion, prospectData);
+                return createSuccessResponse({
+                    success: true,
+                    message: 'Prospecto creado exitosamente en Upnify',
+                    data: result
+                });
             } catch (error) {
-                const errorMessage = error instanceof Error ? error.message : 'Error desconocido';
-                return {
-                    content: [
-                        {
-                            type: 'text',
-                            text: JSON.stringify({
-                                success: false,
-                                error: `Error al crear prospecto en Upnify: ${errorMessage}`
-                            }, null, 2)
-                        }
-                    ]
-                };
+                return createErrorResponse(error, 'Error al crear prospecto en Upnify');
             }
+
         } else if (name === 'get-upnify-sales-report') {
-            const { agrupacion, periodicidad, anio, impuestos } = args as any;
-
-            // Validar parámetros requeridos
-            if (agrupacion === undefined || periodicidad === undefined || anio === undefined || impuestos === undefined) {
-                return {
-                    content: [
-                        {
-                            type: 'text',
-                            text: JSON.stringify({
-                                success: false,
-                                error: 'Se requieren todos los parámetros: agrupacion, periodicidad, anio, impuestos'
-                            }, null, 2)
-                        }
-                    ]
-                };
+            const reportParams = args as any;
+            if (!validateReportParams(reportParams)) {
+                return createErrorResponse(
+                    new Error('Se requieren todos los parámetros: agrupacion, periodicidad, anio, impuestos'),
+                    'Validación de parámetros'
+                );
             }
 
             try {
-                const reportParams = {
-                    agrupacion,
-                    periodicidad,
-                    anio,
-                    impuestos
-                };
+                const result = await reportsHandler.getSalesReport(tkIntegracion, reportParams);
+                const parametersDescription = formatReportParameters(reportParams);
 
-                const result = await upnifyAuth.getSalesReport(tkIntegracion, reportParams);
-
-                const agrupacionLabels: Record<number, string> = {
-                    1: 'Por ejecutivo',
-                    2: 'Por grupo',
-                    3: 'Por línea',
-                    17: 'Por industria',
-                    4: 'Por origen',
-                    5: 'Por país',
-                    6: 'Por región'
-                };
-
-                const periodicidadLabels: Record<number, string> = {
-                    4: 'Mensual',
-                    3: 'Bimestral',
-                    2: 'Trimestral',
-                    1: 'Semestral',
-                    5: 'Quincenal',
-                    6: 'Semanal'
-                };
-
-                const parametersDescription = {
-                    agrupacion: `${agrupacion} (${agrupacionLabels[agrupacion] || 'Desconocido'})`,
-                    periodicidad: `${periodicidad} (${periodicidadLabels[periodicidad] || 'Desconocido'})`,
-                    anio: anio,
-                    impuestos: impuestos === 1 ? 'Incluir' : 'Excluir'
-                };
-
-                return {
-                    content: [
-                        {
-                            type: 'text',
-                            text: JSON.stringify({
-                                success: true,
-                                message: 'Reporte de ventas obtenido exitosamente',
-                                parameters: parametersDescription,
-                                data: result.data
-                            }, null, 2)
-                        }
-                    ]
-                };
-
+                return createSuccessResponse({
+                    success: true,
+                    message: 'Reporte de ventas obtenido exitosamente',
+                    parameters: parametersDescription,
+                    data: result.data
+                });
             } catch (error) {
-                const errorMessage = error instanceof Error ? error.message : 'Error desconocido';
-                return {
-                    content: [
-                        {
-                            type: 'text',
-                            text: JSON.stringify({
-                                success: false,
-                                error: `Error al obtener reporte de ventas de Upnify: ${errorMessage}`
-                            }, null, 2)
-                        }
-                    ]
-                };
+                return createErrorResponse(error, 'Error al obtener reporte de ventas de Upnify');
             }
+
         } else if (name === 'get-upnify-pending-payments') {
-            const { agrupacion, periodicidad } = args as any;
-
-            // Validar parámetros requeridos
-            if (agrupacion === undefined || periodicidad === undefined) {
-                return {
-                    content: [
-                        {
-                            type: 'text',
-                            text: JSON.stringify({
-                                success: false,
-                                error: 'Se requieren todos los parámetros: agrupacion, periodicidad'
-                            }, null, 2)
-                        }
-                    ]
-                };
+            const reportParams = args as any;
+            if (!reportParams.agrupacion || !reportParams.periodicidad) {
+                return createErrorResponse(
+                    new Error('Se requieren todos los parámetros: agrupacion, periodicidad'),
+                    'Validación de parámetros'
+                );
             }
 
             try {
-                const reportParams = {
-                    agrupacion,
-                    periodicidad
-                };
+                const result = await reportsHandler.getPendingPayments(tkIntegracion, reportParams);
+                const parametersDescription = formatPendingPaymentsParameters(reportParams);
 
-                const result = await upnifyAuth.getPendingPayments(tkIntegracion, reportParams);
-
-                // Crear descripción amigable de los parámetros
-                const agrupacionLabels: Record<number, string> = {
-                    1: 'Por ejecutivo',
-                    2: 'Por grupo',
-                    3: 'Por línea',
-                    17: 'Por industria',
-                    4: 'Por origen',
-                    5: 'Por país',
-                    6: 'Por región'
-                };
-
-                const periodicidadLabels: Record<number, string> = {
-                    4: 'Mensual',
-                    3: 'Bimestral',
-                    2: 'Trimestral',
-                    1: 'Semestral',
-                    5: 'Quincenal',
-                    6: 'Semanal'
-                };
-
-                const parametersDescription = {
-                    agrupacion: `${agrupacion} (${agrupacionLabels[agrupacion] || 'Desconocido'})`,
-                    periodicidad: `${periodicidad} (${periodicidadLabels[periodicidad] || 'Desconocido'})`
-                };
-
-                return {
-                    content: [
-                        {
-                            type: 'text',
-                            text: JSON.stringify({
-                                success: true,
-                                message: 'Cobros pendientes obtenidos exitosamente',
-                                parameters: parametersDescription,
-                                total: result.total,
-                                data: result.data
-                            }, null, 2)
-                        }
-                    ]
-                };
-
+                return createSuccessResponse({
+                    success: true,
+                    message: 'Cobros pendientes obtenidos exitosamente',
+                    parameters: parametersDescription,
+                    total: result.total,
+                    data: result.data
+                });
             } catch (error) {
-                const errorMessage = error instanceof Error ? error.message : 'Error desconocido';
-                return {
-                    content: [
-                        {
-                            type: 'text',
-                            text: JSON.stringify({
-                                success: false,
-                                error: `Error al obtener cobros pendientes de Upnify: ${errorMessage}`
-                            }, null, 2)
-                        }
-                    ]
-                };
+                return createErrorResponse(error, 'Error al obtener cobros pendientes de Upnify');
             }
+
         } else if (name === 'search-upnify-contacts') {
             const { buscar, cantidadRegistros = 10 } = args as any;
-
             if (!buscar) {
-                return {
-                    content: [
-                        {
-                            type: 'text',
-                            text: JSON.stringify({
-                                success: false,
-                                error: 'El parámetro "buscar" es obligatorio',
-                                help: 'Proporciona un nombre, correo o teléfono para buscar'
-                            }, null, 2)
-                        }
-                    ]
-                };
+                return createErrorResponse(
+                    new Error('El parámetro "buscar" es obligatorio'),
+                    'Validación de parámetros'
+                );
             }
 
             try {
-                const searchParams = {
-                    buscar,
-                    cantidadRegistros
-                };
-
-                const result = await upnifyAuth.searchContacts(tkIntegracion, searchParams);
-
-                return {
-                    content: [
-                        {
-                            type: 'text',
-                            text: JSON.stringify(result, null, 2)
-                        }
-                    ]
-                };
-
+                const result = await prospectsHandler.searchContacts(tkIntegracion, { buscar, cantidadRegistros });
+                return createSuccessResponse(result);
             } catch (error) {
-                const errorMessage = error instanceof Error ? error.message : 'Error desconocido';
-                return {
-                    content: [
-                        {
-                            type: 'text',
-                            text: JSON.stringify({
-                                success: false,
-                                error: `Error al buscar contactos en Upnify: ${errorMessage}`
-                            }, null, 2)
-                        }
-                    ]
-                };
+                return createErrorResponse(error, 'Error al buscar contactos en Upnify');
             }
+
         } else if (name === 'create-upnify-opportunity') {
             const { concepto, tkProspecto, monto, comision } = args as any;
-
             if (!concepto || !tkProspecto || monto === undefined || comision === undefined) {
-                return {
-                    content: [
-                        {
-                            type: 'text',
-                            text: JSON.stringify({
-                                success: false,
-                                error: 'Se requieren todos los parámetros: concepto, tkProspecto, monto, comision',
-                                help: 'Usa search-upnify-contacts primero para obtener el tkProspecto'
-                            }, null, 2)
-                        }
-                    ]
-                };
+                return createErrorResponse(
+                    new Error('Se requieren todos los parámetros: concepto, tkProspecto, monto, comision'),
+                    'Validación de parámetros'
+                );
             }
 
             try {
-                const opportunityData = {
-                    concepto,
-                    tkProspecto,
-                    monto,
-                    comision
-                };
-
-                const result = await upnifyAuth.createOpportunity(tkIntegracion, opportunityData);
-
-                return {
-                    content: [
-                        {
-                            type: 'text',
-                            text: JSON.stringify(result, null, 2)
-                        }
-                    ]
-                };
-
+                const result = await opportunitiesHandler.createOpportunity(tkIntegracion, { concepto, tkProspecto, monto, comision });
+                return createSuccessResponse(result);
             } catch (error) {
-                const errorMessage = error instanceof Error ? error.message : 'Error desconocido';
-                return {
-                    content: [
-                        {
-                            type: 'text',
-                            text: JSON.stringify({
-                                success: false,
-                                error: `Error al crear oportunidad en Upnify: ${errorMessage}`
-                            }, null, 2)
-                        }
-                    ]
-                };
+                return createErrorResponse(error, 'Error al crear oportunidad en Upnify');
             }
+
         } else if (name === 'create-upnify-reminder') {
             const { asunto, descripcion, fechaInicio } = args as any;
-
-            // Validar parámetros requeridos
             if (!asunto || !descripcion || !fechaInicio) {
-                return {
-                    content: [
-                        {
-                            type: 'text',
-                            text: JSON.stringify({
-                                success: false,
-                                error: 'Se requieren todos los parámetros: asunto, descripcion, fechaInicio'
-                            }, null, 2)
-                        }
-                    ]
-                };
+                return createErrorResponse(
+                    new Error('Se requieren todos los parámetros: asunto, descripcion, fechaInicio'),
+                    'Validación de parámetros'
+                );
             }
 
             try {
-                const reminderData = {
-                    asunto,
-                    descripcion,
-                    fechaInicio
-                };
-
-                const result = await upnifyAuth.createReminder(tkIntegracion, reminderData);
-
-                return {
-                    content: [
-                        {
-                            type: 'text',
-                            text: JSON.stringify({
-                                success: true,
-                                message: 'Recordatorio agendado exitosamente en Upnify',
-                                reminder: {
-                                    asunto: asunto,
-                                    descripcion: descripcion,
-                                    fechaInicio: fechaInicio
-                                },
-                                data: result.data
-                            }, null, 2)
-                        }
-                    ]
-                };
+                const result = await utilitiesHandler.createReminder(tkIntegracion, { asunto, descripcion, fechaInicio });
+                return createSuccessResponse({
+                    success: true,
+                    message: 'Recordatorio agendado exitosamente en Upnify',
+                    reminder: { asunto, descripcion, fechaInicio },
+                    data: result.data
+                });
             } catch (error) {
-                const errorMessage = error instanceof Error ? error.message : 'Error desconocido';
-                return {
-                    content: [
-                        {
-                            type: 'text',
-                            text: JSON.stringify({
-                                success: false,
-                                error: `Error al agendar recordatorio en Upnify: ${errorMessage}`
-                            }, null, 2)
-                        }
-                    ]
-                };
+                return createErrorResponse(error, 'Error al agendar recordatorio en Upnify');
             }
+
         } else if (name === 'get-upnify-activity-report') {
-            const { agrupacion, periodo } = args as any;
-
-            if (agrupacion === undefined || periodo === undefined) {
-                return {
-                    content: [
-                        {
-                            type: 'text',
-                            text: JSON.stringify({
-                                success: false,
-                                error: 'Se requieren todos los parámetros: agrupacion, periodo'
-                            }, null, 2)
-                        }
-                    ]
-                };
+            const params = args as any;
+            if (!validateActivityReportParams(params)) {
+                return createErrorResponse(
+                    new Error('Se requieren todos los parámetros: agrupacion, periodo'),
+                    'Validación de parámetros'
+                );
             }
 
             try {
-                const params = { agrupacion, periodo };
-                const result = await upnifyAuth.getActivityReport(tkIntegracion, params);
-
-                return {
-                    content: [
-                        {
-                            type: 'text',
-                            text: JSON.stringify(result, null, 2)
-                        }
-                    ]
-                };
+                const result = await reportsHandler.getActivityReport(tkIntegracion, params);
+                return createSuccessResponse(result);
             } catch (error) {
-                const errorMessage = error instanceof Error ? error.message : 'Error desconocido';
-                return {
-                    content: [
-                        {
-                            type: 'text',
-                            text: JSON.stringify({
-                                success: false,
-                                error: `Error al obtener reporte de actividades de Upnify: ${errorMessage}`
-                            }, null, 2)
-                        }
-                    ]
-                };
+                return createErrorResponse(error, 'Error al obtener reporte de actividades de Upnify');
             }
+
         } else if (name === 'get-upnify-conversion-report') {
-            const { agrupacion, periodo, situacion } = args as any;
-
-            if (agrupacion === undefined || periodo === undefined || situacion === undefined) {
-                return {
-                    content: [
-                        {
-                            type: 'text',
-                            text: JSON.stringify({
-                                success: false,
-                                error: 'Se requieren todos los parámetros: agrupacion, periodo, situacion'
-                            }, null, 2)
-                        }
-                    ]
-                };
+            const params = args as any;
+            if (!validateConversionReportParams(params)) {
+                return createErrorResponse(
+                    new Error('Se requieren todos los parámetros: agrupacion, periodo, situacion'),
+                    'Validación de parámetros'
+                );
             }
 
             try {
-                const params = { agrupacion, periodo, situacion };
-                const result = await upnifyAuth.getConversionReport(tkIntegracion, params);
-
-                return {
-                    content: [
-                        {
-                            type: 'text',
-                            text: JSON.stringify(result, null, 2)
-                        }
-                    ]
-                };
+                const result = await reportsHandler.getConversionReport(tkIntegracion, params);
+                return createSuccessResponse(result);
             } catch (error) {
-                const errorMessage = error instanceof Error ? error.message : 'Error desconocido';
-                return {
-                    content: [
-                        {
-                            type: 'text',
-                            text: JSON.stringify({
-                                success: false,
-                                error: `Error al obtener reporte de conversiones de Upnify: ${errorMessage}`
-                            }, null, 2)
-                        }
-                    ]
-                };
+                return createErrorResponse(error, 'Error al obtener reporte de conversiones de Upnify');
             }
+
         } else {
             throw new Error(`Unknown tool: ${name}`);
         }
     } catch (error) {
-        const errorMessage = error instanceof Error ? error.message : 'Error desconocido';
-        return {
-            content: [
-                {
-                    type: 'text',
-                    text: JSON.stringify({
-                        success: false,
-                        error: errorMessage
-                    }, null, 2)
-                }
-            ]
-        };
+        return createErrorResponse(error, 'Error general');
     }
 });
 
