@@ -23,8 +23,8 @@ import {
     createSuccessResponse 
 } from './utils/validators.js';
 
-// Cargar variables de entorno
-dotenv.config();
+// Cargar variables de entorno sin logs para evitar errores de JSON en Claude Desktop
+dotenv.config({ quiet: true });
 
 // Inicializar autenticador y handlers
 const upnifyAuth = new UpnifyAuthenticator();
