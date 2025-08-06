@@ -40,11 +40,6 @@ const opportunitiesHandler = new OpportunitiesHandler(upnifyAuth);
 const reportsHandler = new ReportsHandler(upnifyAuth);
 const utilitiesHandler = new UtilitiesHandler(upnifyAuth);
 
-// Limpiar tokens expirados cada 30 minutos
-setInterval(() => {
-    upnifyAuth.cleanExpiredTokens();
-}, 30 * 60 * 1000);
-
 const server = new Server({
     name: 'upnify-server',
     version: '1.0.0',
@@ -470,9 +465,13 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 });
 
 async function main() {
+    console.error('🔧 MCP: Starting transport initialization...');
     const transport = new StdioServerTransport();
+    
+    console.error('🔧 MCP: Connecting to transport...');
     await server.connect(transport);
-    console.error('Upnify MCP server running on stdio');
+    
+    console.error('✅ Upnify MCP server running on stdio');
 }
 
 main().catch((error) => {
