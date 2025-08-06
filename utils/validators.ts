@@ -3,13 +3,23 @@ import type { ReportParams, ActivityReportParams, ConversionReportParams } from 
 
 // Función para obtener el tkIntegracion del contexto
 export function getTkIntegracion(request: any): string {
-    // Usar directamente la variable de entorno como respaldo
-    const tkIntegracion = process.env.TK_INTEGRACION || 'P074243F238-9BD5-4EA1-8DD9-D05E890EA024';
+    // Intentar múltiples formas de obtener el token
+    const tokenSources = [
+        process.env.TK_INTEGRACION,
+        process.env.tkIntegracion,
+        process.env.TK_INTEGRACION_TOKEN,
+        'P074243F238-9BD5-4EA1-8DD9-D05E890EA024' // Fallback hardcodeado
+    ];
+
+    const tkIntegracion = tokenSources.find(token => token && token.trim().length > 0);
 
     console.error('=== DEBUG AUTENTICACIÓN ===');
     console.error('Process env TK_INTEGRACION:', process.env.TK_INTEGRACION);
+    console.error('Process env tkIntegracion:', process.env.tkIntegracion);
+    console.error('Process env TK_INTEGRACION_TOKEN:', process.env.TK_INTEGRACION_TOKEN);
+    console.error('Todas las env vars:', Object.keys(process.env).filter(k => k.toLowerCase().includes('integracion') || k.toLowerCase().includes('upnify')));
     console.error('Token final usado:', tkIntegracion);
-    console.error('Request meta:', JSON.stringify(request.meta, null, 2));
+    console.error('Request meta:', JSON.stringify(request?.meta, null, 2));
     console.error('=== FIN DEBUG ===');
 
     if (!tkIntegracion) {

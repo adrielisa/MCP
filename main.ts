@@ -26,7 +26,12 @@ import {
 } from './utils/validators.js';
 
 // Cargar variables de entorno sin logs para evitar errores de JSON en Claude Desktop
-dotenv.config({ quiet: true });
+try {
+    dotenv.config({ quiet: true });
+} catch (error) {
+    // Si dotenv falla, continuar sin él
+    console.error('Warning: dotenv failed to load, using environment variables directly');
+}
 
 // Inicializar autenticador y handlers
 const upnifyAuth = new UpnifyAuthenticator();
