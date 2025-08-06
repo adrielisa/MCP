@@ -1,0 +1,33 @@
+# Source files
+*.ts
+!*.d.ts
+tsconfig.json
+
+# Development files
+.env
+.env.local
+.env.*.local
+
+# Build tools
+node_modules/
+.git/
+.gitignore
+
+# IDE
+.vscode/
+.idea/
+
+# Testing
+test/
+tests/
+*.test.*
+*.spec.*
+
+# Documentation (except README)
+docs/
+RESUMEN_IMPLEMENTACION.md
+
+# Misc
+*.log
+.DS_Store
+Thumbs.db
