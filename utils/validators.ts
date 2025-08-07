@@ -8,7 +8,6 @@ export function getTkIntegracion(request: any): string {
         process.env.TK_INTEGRACION,
         process.env.tkIntegracion,
         process.env.TK_INTEGRACION_TOKEN,
-        'P074243F238-9BD5-4EA1-8DD9-D05E890EA024' // Fallback hardcodeado
     ];
 
     const tkIntegracion = tokenSources.find(token => token && token.trim().length > 0);
